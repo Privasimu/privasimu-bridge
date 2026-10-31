@@ -1,0 +1,9 @@
+.git
+dist
+bin
+docs
+deploy
+examples
+*.md
+**/testdata
+**/*_test.go

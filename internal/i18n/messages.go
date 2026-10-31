@@ -99,7 +99,7 @@ var catalog = map[string][2]string{
 		"Konfigurasi tidak ada di %s. Buat dengan \"privasimu-bridge init\" atau beri --config.",
 	},
 
-	"cli.init.usage":    {"Usage: privasimu-bridge init [--dir DIR] [--listen ADDR] [--public-url URL] [--platform-url URL] [--force]", "Pemakaian: privasimu-bridge init [--dir DIR] [--listen ALAMAT] [--public-url URL] [--platform-url URL] [--force]"},
+	"cli.init.usage":    {"Usage: privasimu-bridge init [--dir DIR] [--listen ADDR] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]", "Pemakaian: privasimu-bridge init [--dir DIR] [--listen ALAMAT] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]"},
 	"cli.init.exists":   {"%s already exists; use --force to write a new one (the secret store key is kept).", "%s sudah ada; pakai --force untuk menulis yang baru (kunci penyimpanan rahasia tetap dipakai)."},
 	"cli.init.created":  {"Created %s", "Dibuat %s"},
 	"cli.init.kept_key": {"Kept the existing secret store key %s", "Kunci penyimpanan rahasia yang ada tetap dipakai: %s"},

@@ -1,0 +1,45 @@
+# Reference unit, as written by "privasimu-bridge service install" on Linux.
+# Prefer the command: it also creates the service user and fixes folder permissions.
+[Unit]
+Description=Privasimu Bridge (mode A): answers Privasimu Data Discovery with column names and findings.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privasimu-bridge
+Group=privasimu-bridge
+ExecStart=/usr/local/bin/privasimu-bridge --config /etc/privasimu-bridge/bridge.yaml serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/privasimu-bridge
+ReadWritePaths=/var/log/privasimu-bridge
+ReadOnlyPaths=-/etc/privasimu-bridge
+ReadOnlyPaths=-/srv/shares/hr
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

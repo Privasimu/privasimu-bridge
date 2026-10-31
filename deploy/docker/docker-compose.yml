@@ -1,0 +1,46 @@
+# Example: Privasimu Bridge with Docker Compose. Use one of the two services.
+#
+# First run (creates config/bridge.yaml, the store key and the first API key):
+#   mkdir -p config && sudo chown 65532:65532 config
+#   docker compose run --rm bridge init --dir /etc/privasimu-bridge \
+#     --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs \
+#     --public-url https://bridge.example.co.id:8443
+#   docker compose run --rm bridge secret set corebank_pg     (reads the value from stdin)
+# Then put the certificate in config/tls/, edit config/bridge.yaml and start:
+#   docker compose up -d bridge          (mode A)    or    docker compose up -d agent (mode B)
+
+x-hardening: &hardening
+  image: privasimu-bridge:0.1.0
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  environment:
+    PRIVASIMU_BRIDGE_CONFIG: /etc/privasimu-bridge/bridge.yaml
+  volumes:
+    - ./config:/etc/privasimu-bridge            # read-write only for init; add :ro afterwards
+    - bridge-state:/var/lib/privasimu-bridge
+    - /srv/shares/hr:/data/hr:ro                # file roots, always read-only
+  tmpfs:
+    - /tmp
+
+services:
+  # Mode A: Privasimu calls https://bridge.example.co.id:8443
+  bridge:
+    <<: *hardening
+    command: ["serve"]
+    ports:
+      - "8443:8443"
+
+  # Mode B: outbound only, no port.
+  agent:
+    <<: *hardening
+    command: ["agent"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/privasimu-bridge", "healthcheck", "--mode", "agent"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bridge-state:

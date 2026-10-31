@@ -1,0 +1,194 @@
+# Privasimu Bridge: complete reference configuration.
+#
+# Every option is shown with its default or an example value. No secret is written in this
+# file: passwords and tokens are references, resolved when the bridge runs:
+#   secret:NAME   the encrypted store (privasimu-bridge secret set NAME)
+#   env:NAME      an environment variable
+#   file:PATH     a file, e.g. a Docker secret (/run/secrets/x) or a systemd credential
+# A literal password is a configuration error. Unknown keys are errors too (they catch
+# typos). Relative paths are relative to this file's folder.
+
+language: en                  # en | id: language of CLI output and error messages
+state_dir: state              # reports, agent state, file-id key (needs write access)
+
+# ---------------------------------------------------------------------------------------
+# Mode A: "privasimu-bridge serve". Privasimu calls this HTTPS server (contract v1).
+# ---------------------------------------------------------------------------------------
+server:
+  listen: "0.0.0.0:8443"
+  # The address entered in Privasimu as "Service address (https)". Used by "check" to
+  # verify that the certificate matches.
+  public_url: "https://bridge.example.co.id:8443"
+  # A path prefix when a reverse proxy forwards e.g. https://gw.example.co.id/bridge/...
+  base_path: ""
+  tls:
+    # file:  the bridge serves TLS itself. The certificate must be trusted by the
+    #        Privasimu server, which verifies it with its system trust store and never
+    #        skips verification: a public CA for Privasimu SaaS, or your internal CA
+    #        installed on an on-premise Privasimu server.
+    # proxy: a reverse proxy on this host terminates TLS and forwards plain HTTP;
+    #        listen must then be a loopback address such as 127.0.0.1:8080.
+    mode: file
+    cert_file: tls/fullchain.pem    # leaf first, then intermediates
+    key_file: tls/privkey.pem
+    min_version: "1.2"              # 1.2 | 1.3
+  # Only these addresses may connect: the outgoing IPs of the Privasimu servers. Other
+  # connections are closed before the TLS handshake. Empty = any address (not advised).
+  allowed_clients:
+    - 203.0.113.10/32
+  # Proxy mode only: proxies whose X-Forwarded-For is trusted (default: loopback).
+  trusted_proxies: []
+  # API keys as SHA-256 hashes; create with "privasimu-bridge key create".
+  api_keys:
+    - id: k_1a2b3c4d
+      hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      created: "2026-10-31"
+      expires: ""                   # optional YYYY-MM-DD
+      disabled: false
+  # local (default, recommended): Privasimu can only scan the sources listed below; it is
+  #   matched by engine + host + database as typed in Privasimu (see sources[].match),
+  #   and the password typed in Privasimu is ignored, so it can be any placeholder.
+  # request: the connection settings Privasimu sends are used (contract v1 behaviour),
+  #   but only for hosts inside allowed_targets.
+  credentials: local
+  allowed_targets: []               # request mode: CIDR ranges, IPs or exact host names
+  targets_ca_file: ""               # request mode: CA bundle for databases with use_ssl
+  # Optional file-root endpoints (/ext/v1/...): a proposed extension that Privasimu does
+  # not call yet. Off by default.
+  file_endpoints: false
+  limits:
+    max_body_bytes: 64KiB
+    rate_per_second: 20             # per client address
+    burst: 60
+    max_concurrent: 16              # requests at once; more get 503
+    per_source_concurrency: 4       # Privasimu sends at most 4 at once
+    request_timeout: 25s            # Privasimu waits 30 s per call
+    max_tables: 10000               # names returned per list (Privasimu keeps 500)
+    max_columns: 5000
+    auth_failures: 10               # failed keys before an address is locked out
+    lockout: 15m
+  # Sampling override for request mode (local sources use their own setting).
+  # sampling: {enabled: false, rows: 100}
+
+# ---------------------------------------------------------------------------------------
+# Mode B: "privasimu-bridge agent". Outbound only; needs the platform side (see DESIGN.md).
+# ---------------------------------------------------------------------------------------
+agent:
+  platform_url: "https://app.privasimu.example"
+  agent_id: ""                      # written to state/agent.json by "agent enroll"
+  token: "secret:agent_token"       # must be secret:NAME so enroll can store it
+  ca_file: ""                       # extra CA for an on-premise Privasimu
+  proxy_url: ""                     # e.g. http://proxy.example.co.id:8080
+  proxy_auth: ""                    # e.g. secret:proxy_auth (value "user:password")
+  allowed_jobs: [test_source, scan_database, scan_files]
+  max_parallel_jobs: 1
+  poll_min: 5s
+  poll_max: 5m
+
+# ---------------------------------------------------------------------------------------
+# Databases this bridge may scan.
+# ---------------------------------------------------------------------------------------
+sources:
+  - id: core-banking                # lower case, digits, - _ . (used in mode B and logs)
+    label: "Core banking (DC Jakarta)"
+    description: ""
+    engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb
+    host: 10.10.1.20
+    port: 5432                      # default per engine
+    database: corebank
+    username: privasimu_ro          # a read-only account (see the install guide)
+    password: "secret:corebank_pg"
+    schemas: [public, cif]          # optional allow-list; empty = every non-system schema
+    tls:
+      mode: verify-full             # disable | prefer | require | verify-ca | verify-full
+      ca_file: tls/db-ca.pem
+      server_name: ""               # when the certificate name differs from host
+    timeout: 20s                    # per statement
+    # Local sampling: reads up to "rows" values per column ON THIS SERVER to confirm
+    # personal data. Only counts and categories leave. Off unless enabled.
+    sampling:
+      enabled: true
+      rows: 100
+      min_matches: 3
+      ratio: 0.2
+    # Mode A: what is typed in Privasimu for this source. Defaults to host and database
+    # above; an alias keeps the real address out of Privasimu.
+    match:
+      host: corebank
+      database: corebank
+
+  - id: crm
+    label: "CRM"
+    engine: mysql
+    host: crm-db.internal.example.co.id
+    database: crm
+    username: privasimu_ro
+    password: "env:CRM_DB_PASSWORD"
+
+  - id: hr-sqlserver
+    label: "HR (SQL Server)"
+    engine: mssql
+    host: sql01.internal.example.co.id
+    instance: ""                    # named instance (port resolved by SQL Browser)
+    database: HRIS
+    username: privasimu_ro
+    password: "secret:hr_mssql"
+    tls:
+      mode: require                 # encrypted, server certificate not verified
+
+  - id: finance-oracle
+    label: "Finance (Oracle)"
+    engine: oracle
+    host: ora01.internal.example.co.id
+    port: 1521
+    service_name: FINPDB            # or sid
+    username: PRIVASIMU_RO
+    password: "file:/run/secrets/finance_oracle"
+    schemas: [FIN]                  # Oracle schema = owner; default = the user's own schema
+
+  - id: app-mongo
+    label: "Mobile app (MongoDB)"
+    engine: mongodb
+    uri: "secret:app_mongo_uri"     # mongodb://user:pass@host:27017/?authSource=admin
+    database: app
+
+# ---------------------------------------------------------------------------------------
+# File shares this bridge may scan. Only these directories are ever read; the platform
+# names a root by id and can never send a path. Links that leave a root are refused.
+# ---------------------------------------------------------------------------------------
+files:
+  report_paths: hashed              # hashed (default): keyed hash per file; relative: path
+  max_file_bytes: 100MiB            # larger files are skipped and counted
+  max_text_bytes: 16MiB             # text read per file
+  pdf_timeout: 30s                  # PDF text is extracted in a separate process
+  roots:
+    - id: hr-share
+      label: "HR file share"
+      path: /srv/shares/hr          # Windows: 'D:\Shares\HR' or "D:/Shares/HR"
+      include: []                   # globs; empty = every supported type
+      exclude: ["arsip/**", "**/*.tmp"]
+      content_scan: true            # false = names and sizes only
+      max_files: 500000
+      max_depth: 64
+      report_paths: hashed
+      refresh_interval: 24h         # rescan in the background; 0 = on request only
+
+detection:
+  sampling:
+    enabled: false                  # global default; a source can override it
+    rows: 100
+    min_matches: 3
+    ratio: 0.2
+
+secrets:
+  file: secrets.enc                 # AES-256-GCM encrypted store
+  key_file: secrets.key             # or PRIVASIMU_BRIDGE_SECRETS_KEY(_FILE)
+
+audit:
+  file: logs/audit.jsonl            # JSON lines; no value, password or key is ever written
+  max_size_mb: 50
+  max_files: 10
+
+log:
+  level: info                       # debug | info | warn | error
+  file: ""                          # empty = standard error (service: logs/bridge.log)

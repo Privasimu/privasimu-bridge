@@ -23,6 +23,8 @@ func (a *app) cmdInit(args []string) error {
 	listen := fs.String("listen", "0.0.0.0:8443", "")
 	publicURL := fs.String("public-url", "", "")
 	platformURL := fs.String("platform-url", "", "")
+	stateFlag := fs.String("state-dir", "", "")
+	logFlag := fs.String("log-dir", "", "")
 	force := fs.Bool("force", false, "")
 	if err := parseFlags(a, fs, args, "cli.init.usage"); err != nil {
 		return err
@@ -43,9 +45,19 @@ func (a *app) cmdInit(args []string) error {
 		return errors.New(i18n.T("cli.init.exists", cfgPath))
 	}
 	stateDir := config.DefaultStateDir(abs)
+	if *stateFlag != "" {
+		if stateDir, err = filepath.Abs(*stateFlag); err != nil {
+			return err
+		}
+	}
 	logDir := config.DefaultLogDir(abs)
+	if *logFlag != "" {
+		if logDir, err = filepath.Abs(*logFlag); err != nil {
+			return err
+		}
+	}
 	secretsFile := filepath.Join(abs, "secrets.enc")
-	if runtime.GOOS != "windows" && abs == "/etc/privasimu-bridge" {
+	if runtime.GOOS != "windows" && (abs == "/etc/privasimu-bridge" || *stateFlag != "") {
 		// The service writes the store when the agent token rotates; /etc stays read-only.
 		secretsFile = filepath.Join(stateDir, "secrets.enc")
 	}
