@@ -1,0 +1,23 @@
+{
+  "protocol": 1,
+  "envelope": "{\"error\":{\"code\":\"<code>\",\"message\":\"<message>\"}}",
+  "errors": [
+    {"code": "invalid_request", "status": 400, "message": "The request is not valid."},
+    {"code": "unauthenticated", "status": 401, "message": "The agent token is missing or not valid."},
+    {"code": "agent_revoked", "status": 401, "message": "This agent has been revoked."},
+    {"code": "enrollment_invalid", "status": 401, "message": "The enrollment token is not valid, already used or expired."},
+    {"code": "forbidden", "status": 403, "message": "This agent may not perform this action."},
+    {"code": "not_found", "status": 404, "message": "Not found."},
+    {"code": "job_not_found", "status": 404, "message": "The job does not exist for this agent."},
+    {"code": "method_not_allowed", "status": 405, "message": "This method is not allowed here."},
+    {"code": "lease_expired", "status": 409, "message": "The job lease is not valid or has expired."},
+    {"code": "part_conflict", "status": 409, "message": "A different part with this number was already received."},
+    {"code": "parts_incomplete", "status": 409, "message": "Not every part of the result has been received."},
+    {"code": "payload_too_large", "status": 413, "message": "The request body is too large."},
+    {"code": "unsupported_media_type", "status": 415, "message": "The request body must be JSON."},
+    {"code": "protocol_unsupported", "status": 426, "message": "This agent protocol version is not supported; upgrade the bridge."},
+    {"code": "rate_limited", "status": 429, "message": "Too many requests; retry later."},
+    {"code": "server_error", "status": 500, "message": "Internal error."},
+    {"code": "maintenance", "status": 503, "message": "The service is temporarily unavailable; retry later."}
+  ]
+}

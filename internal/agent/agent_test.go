@@ -6,7 +6,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -456,4 +458,44 @@ func testLogger() *slog.Logger {
 		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
 	return slog.New(slog.DiscardHandler)
+}
+
+// TestErrorTableMatchesTheProtocol keeps protocol.go, docs/agent-protocol/errors.json and
+// the fake platform in step, and pins the canonical bytes of an error response.
+func TestErrorTableMatchesTheProtocol(t *testing.T) {
+	if len(protocolErrors) != len(ErrorCodes) {
+		t.Fatalf("errors.json has %d codes, protocol.go %d", len(protocolErrors), len(ErrorCodes))
+	}
+	for _, c := range ErrorCodes {
+		e, ok := protocolErrors[c]
+		if !ok || e.Status < 400 || e.Message == "" || !strings.HasSuffix(e.Message, ".") {
+			t.Errorf("%s: %+v", c, e)
+		}
+	}
+	var body ErrorBody
+	body.Error.Code, body.Error.Message = ErrLeaseExpired, protocolErrors[ErrLeaseExpired].Message
+	want := `{"error":{"code":"lease_expired","message":"The job lease is not valid or has expired."}}`
+	if got := string(canonical(body)); got != want {
+		t.Fatalf("canonical error bytes:\n got %s\nwant %s", got, want)
+	}
+	// Canonical JSON leaves "/" and "<" unescaped; Go must disable HTML escaping and Laravel
+	// must pass JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE.
+	if got := string(canonical(map[string]string{"a": "x/<é>"})); got != `{"a":"x/<é>"}` {
+		t.Fatalf("canonical escaping: %s", got)
+	}
+}
+
+func TestPlatformRefusesAMissingProtocolHeader(t *testing.T) {
+	e := newEnv(t, nil)
+	req, _ := http.NewRequest(http.MethodPost, e.fp.srv.URL+APIPrefix+PathPoll, strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.fp.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 426 || string(raw) != `{"error":{"code":"protocol_unsupported","message":"This agent protocol version is not supported; upgrade the bridge."}}` {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
 }

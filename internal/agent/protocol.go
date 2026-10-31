@@ -33,21 +33,37 @@ const (
 	JobScanFiles    = "scan_files"
 )
 
-// Error codes the platform returns in {"error": {"code": ...}}.
+// Error codes the platform returns in {"error": {"code": ...}}. The status and the exact
+// message of each code are in docs/agent-protocol/errors.json.
 const (
-	ErrInvalidRequest      = "invalid_request"
-	ErrUnauthenticated     = "unauthenticated"
-	ErrAgentRevoked        = "agent_revoked"
-	ErrEnrollmentInvalid   = "enrollment_invalid"
-	ErrJobNotFound         = "job_not_found"
-	ErrLeaseExpired        = "lease_expired"
-	ErrPartConflict        = "part_conflict"
-	ErrPartsIncomplete     = "parts_incomplete"
-	ErrPayloadTooLarge     = "payload_too_large"
-	ErrProtocolUnsupported = "protocol_unsupported"
-	ErrRateLimited         = "rate_limited"
-	ErrMaintenance         = "maintenance"
-	ErrServer              = "server_error"
+	ErrInvalidRequest       = "invalid_request"
+	ErrUnauthenticated      = "unauthenticated"
+	ErrAgentRevoked         = "agent_revoked"
+	ErrEnrollmentInvalid    = "enrollment_invalid"
+	ErrForbidden            = "forbidden"
+	ErrNotFound             = "not_found"
+	ErrJobNotFound          = "job_not_found"
+	ErrMethodNotAllowed     = "method_not_allowed"
+	ErrLeaseExpired         = "lease_expired"
+	ErrPartConflict         = "part_conflict"
+	ErrPartsIncomplete      = "parts_incomplete"
+	ErrPayloadTooLarge      = "payload_too_large"
+	ErrUnsupportedMediaType = "unsupported_media_type"
+	ErrProtocolUnsupported  = "protocol_unsupported"
+	ErrRateLimited          = "rate_limited"
+	ErrServer               = "server_error"
+	ErrMaintenance          = "maintenance"
+)
+
+// ErrorCodes lists every platform error code (checked against errors.json by the tests).
+var ErrorCodes = []string{ErrInvalidRequest, ErrUnauthenticated, ErrAgentRevoked, ErrEnrollmentInvalid, ErrForbidden,
+	ErrNotFound, ErrJobNotFound, ErrMethodNotAllowed, ErrLeaseExpired, ErrPartConflict, ErrPartsIncomplete,
+	ErrPayloadTooLarge, ErrUnsupportedMediaType, ErrProtocolUnsupported, ErrRateLimited, ErrServer, ErrMaintenance}
+
+// Status values of complete and fail responses.
+const (
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
 )
 
 // Failure codes the agent reports in a fail request (error_code).

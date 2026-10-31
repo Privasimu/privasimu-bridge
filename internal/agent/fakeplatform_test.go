@@ -12,6 +12,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -83,16 +85,73 @@ func (f *fakePlatform) job(id string) *fakeJob {
 	return f.jobs[id]
 }
 
-func apiErr(w http.ResponseWriter, status int, code string) {
+// protocolErrors is docs/agent-protocol/errors.json: the normative status and message of
+// every error code, shared with the platform implementations.
+var protocolErrors = func() map[string]struct {
+	Status  int
+	Message string
+} {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "agent-protocol", "errors.json"))
+	if err != nil {
+		panic(err)
+	}
+	var doc struct {
+		Errors []struct {
+			Code    string `json:"code"`
+			Status  int    `json:"status"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		panic(err)
+	}
+	out := map[string]struct {
+		Status  int
+		Message string
+	}{}
+	for _, e := range doc.Errors {
+		out[e.Code] = struct {
+			Status  int
+			Message string
+		}{e.Status, e.Message}
+	}
+	return out
+}()
+
+// canonical encodes a response the way docs/AGENT-PROTOCOL.md requires: compact, keys in
+// declaration order, no HTML escaping, no trailing newline.
+func canonical(v any) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		panic(err)
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte{'\n'})
+}
+
+func headers(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("X-Bridge-Protocol", "1")
+}
+
+func apiErr(w http.ResponseWriter, status int, code string) {
+	e, ok := protocolErrors[code]
+	if !ok || e.Status != status {
+		panic("the fake platform used an error that is not in errors.json: " + code)
+	}
+	headers(w)
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":{"code":"` + code + `","message":"x"}}`))
+	var body ErrorBody
+	body.Error.Code, body.Error.Message = code, e.Message
+	_, _ = w.Write(canonical(body))
 }
 
 func reply(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	headers(w)
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(canonical(v))
 }
 
 func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +163,15 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Unlock()
 	path := strings.TrimPrefix(r.URL.Path, APIPrefix)
+	// Check order of docs/AGENT-PROTOCOL.md: protocol header, then content type.
+	if r.Header.Get("X-Bridge-Protocol") != "1" {
+		apiErr(w, 426, ErrProtocolUnsupported)
+		return
+	}
+	if r.Header.Get("Content-Type") != "application/json" {
+		apiErr(w, 415, ErrUnsupportedMediaType)
+		return
+	}
 	if path == PathEnroll && r.Method == http.MethodPost {
 		var req EnrollRequest
 		_ = json.Unmarshal(body, &req)
@@ -171,7 +239,7 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, pathJobs):
 		f.jobAction(w, r, strings.TrimPrefix(path, pathJobs), body)
 	default:
-		apiErr(w, 404, "not_found")
+		apiErr(w, 404, ErrNotFound)
 	}
 }
 
@@ -188,11 +256,16 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 		apiErr(w, 409, ErrLeaseExpired)
 		return
 	}
-	if j.completed != nil || j.failed != nil {
-		if action == "complete" || action == "fail" {
-			reply(w, 200, StatusResponse{Status: "already_finished"})
-			return
-		}
+	// A finished job answers a repeated complete or fail with the same status (the first
+	// response may have been lost); anything else is a withdrawn lease.
+	switch {
+	case j.completed != nil && action == "complete":
+		reply(w, 200, StatusResponse{Status: StatusCompleted})
+		return
+	case j.failed != nil && action == "fail":
+		reply(w, 200, StatusResponse{Status: StatusFailed})
+		return
+	case j.completed != nil || j.failed != nil:
 		apiErr(w, 409, ErrLeaseExpired)
 		return
 	}
@@ -234,14 +307,14 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 			}
 		}
 		j.completed = &req
-		reply(w, 200, StatusResponse{Status: "completed"})
+		reply(w, 200, StatusResponse{Status: StatusCompleted})
 	case "fail":
 		var req FailRequest
 		_ = json.Unmarshal(body, &req)
 		j.failed = &req
-		reply(w, 200, StatusResponse{Status: "failed"})
+		reply(w, 200, StatusResponse{Status: StatusFailed})
 	default:
-		apiErr(w, 404, "not_found")
+		apiErr(w, 404, ErrNotFound)
 	}
 }
 

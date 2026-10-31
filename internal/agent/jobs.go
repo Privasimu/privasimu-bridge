@@ -178,7 +178,7 @@ func (a *Agent) keepLease(ctx context.Context, job Job, prog *progressState, can
 		resp, err := a.client.Progress(pctx, job, prog.request())
 		pcancel()
 		if err != nil {
-			if code := codeOf(err); code == ErrLeaseExpired || code == ErrJobNotFound {
+			if code := codeOf(err); code == ErrLeaseExpired || code == ErrJobNotFound || code == ErrForbidden {
 				lost.Store(true)
 				cancel()
 				return
@@ -297,10 +297,17 @@ func (a *Agent) target(src *config.SourceConfig) (dbsource.Target, error) {
 	return t, nil
 }
 
+// dbFailure reports a database error as error_kind = the dbsource kind and error_code =
+// "database_" + kind ("database_auth", "database_unreachable", ...), or "database_error"
+// for an unclassified error.
 func dbFailure(stage string, err error) *jobError {
 	kind := dbsource.KindOf(err)
 	retryable := kind == dbsource.KindUnreachable || kind == dbsource.KindTimeout
-	return failure(kind, FailDatabasePrefix+kind, stage, retryable)
+	code := FailDatabasePrefix + kind
+	if kind == dbsource.KindDatabase {
+		code = FailDatabase
+	}
+	return failure(kind, code, stage, retryable)
 }
 
 func (a *Agent) testDatabase(ctx context.Context, src *config.SourceConfig, ev *audit.Event) (TestResult, error) {
