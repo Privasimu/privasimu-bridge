@@ -205,6 +205,9 @@ type FileRoot struct {
 	MaxFiles    int      `yaml:"max_files"`
 	MaxDepth    int      `yaml:"max_depth"`
 	ReportPaths string   `yaml:"report_paths"`
+	// RefreshInterval rescans the root in the background when its report is older
+	// (0 = only on request).
+	RefreshInterval Duration `yaml:"refresh_interval"`
 }
 
 // DetectionConfig holds the global detection settings.
