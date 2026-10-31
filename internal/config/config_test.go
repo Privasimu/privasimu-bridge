@@ -146,23 +146,29 @@ func TestServerValidation(t *testing.T) {
 
 func TestAgentValidation(t *testing.T) {
 	c, _ := Parse([]byte(validYAML))
-	if err := c.ValidateAgent(false); err == nil {
+	if err := c.ValidateAgent(); err == nil {
 		t.Fatal("platform_url is required")
 	}
 	c.Agent.PlatformURL = "https://app.privasimu.example"
-	if err := c.ValidateAgent(false); err != nil {
+	if err := c.ValidateAgent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ValidateAgent(true); err == nil {
-		t.Fatal("an enrolled agent needs agent_id")
+	c.Agent.AgentID = "not an id!"
+	if err := c.ValidateAgent(); err == nil {
+		t.Fatal("an agent_id override must look like an id")
 	}
 	c.Agent.AgentID = "0b7c5d0e-8f8a-4d6e-9d55-3f1d2a6b7c8d"
-	if err := c.ValidateAgent(true); err != nil {
+	if err := c.ValidateAgent(); err != nil {
 		t.Fatal(err)
 	}
 	c.Agent.PlatformURL = "http://app.privasimu.example"
-	if err := c.ValidateAgent(true); err == nil {
+	if err := c.ValidateAgent(); err == nil {
 		t.Fatal("plain http must be refused")
+	}
+	c.Agent.PlatformURL = "https://app.privasimu.example"
+	c.Agent.Token = "hunter2"
+	if err := c.ValidateAgent(); err == nil {
+		t.Fatal("a literal token must be refused")
 	}
 }
 

@@ -40,7 +40,7 @@ var catalog = map[string][2]string{
 	"config.public_url":       {"server.public_url must be an https:// address", "server.public_url harus alamat https://"},
 	"config.base_path":        {"server.base_path must start with / and contain no query or spaces", "server.base_path harus diawali / dan tanpa query atau spasi"},
 	"config.platform_url":     {"agent.platform_url must be an https:// address without user, query or fragment", "agent.platform_url harus alamat https:// tanpa user, query atau fragmen"},
-	"config.agent_id":         {"agent.agent_id is missing; enroll first with: privasimu-bridge agent enroll", "agent.agent_id belum ada; daftarkan dulu dengan: privasimu-bridge agent enroll"},
+	"config.agent_id":         {"agent.agent_id must be the id given by the platform (letters, digits and -)", "agent.agent_id harus id yang diberikan platform (huruf, angka, dan -)"},
 	"config.proxy_url":        {"agent.proxy_url must be an http:// or https:// address without credentials (use agent.proxy_auth)", "agent.proxy_url harus alamat http:// atau https:// tanpa kredensial (pakai agent.proxy_auth)"},
 	"config.job":              {"agent.allowed_jobs: unknown job type %q", "agent.allowed_jobs: jenis tugas %q tidak dikenal"},
 	"config.poll":             {"agent.poll_min must be at least 1s and not above agent.poll_max", "agent.poll_min minimal 1s dan tidak melebihi agent.poll_max"},

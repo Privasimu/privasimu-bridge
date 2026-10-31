@@ -292,15 +292,15 @@ func (c *Config) ValidateServer() error {
 	return p.err()
 }
 
-// ValidateAgent checks the settings of mode B. enrolled is false while enrolling, when the
-// agent id is not known yet.
-func (c *Config) ValidateAgent(enrolled bool) error {
+// ValidateAgent checks the settings of mode B. The agent id normally comes from the
+// state directory (written by enroll); agent.agent_id only overrides it.
+func (c *Config) ValidateAgent() error {
 	var p problems
 	a := &c.Agent
 	if u, err := url.Parse(a.PlatformURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" {
 		p.add("config.platform_url")
 	}
-	if enrolled && !agentIDPattern.MatchString(a.AgentID) {
+	if a.AgentID != "" && !agentIDPattern.MatchString(a.AgentID) {
 		p.add("config.agent_id")
 	}
 	checkRef(&p, "agent.token", a.Token)
