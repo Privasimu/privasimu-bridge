@@ -1,0 +1,9 @@
+{
+  "status": "success",
+  "database": "corebank",
+  "tables_scanned": 1,
+  "results": [
+    "log"
+  ]
+}
+

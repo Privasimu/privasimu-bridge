@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "code": "source_not_allowed",
+  "message": "This database is not configured on the bridge, or its address is not allowed."
+}
+

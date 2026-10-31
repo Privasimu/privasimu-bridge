@@ -1,0 +1,41 @@
+{
+  "status": "success",
+  "table": "audit.log",
+  "analysis_summary": {
+    "total_columns": 2,
+    "pii_columns": 1,
+    "pdp_columns": 1,
+    "omitted_columns": 0,
+    "sampled": true
+  },
+  "column_details": [
+    {
+      "column_name": "id",
+      "data_type": "integer",
+      "is_pii": false,
+      "is_pdp": false,
+      "pdp_category": null,
+      "type": null,
+      "pii_category": null,
+      "confidence": 0,
+      "detection": "none"
+    },
+    {
+      "column_name": "client_ip",
+      "data_type": "character varying(255)",
+      "is_pii": true,
+      "is_pdp": true,
+      "pdp_category": "umum",
+      "type": "ip_address",
+      "pii_category": "online",
+      "confidence": 0.9,
+      "detection": "name",
+      "content": {
+        "sampled": 0,
+        "matching": 0,
+        "protection_state": "unknown"
+      }
+    }
+  ]
+}
+

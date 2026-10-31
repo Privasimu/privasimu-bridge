@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "database": "corebank",
+  "tables_scanned": 3,
+  "results": [
+    "orders",
+    "users",
+    "audit.log"
+  ]
+}
+
