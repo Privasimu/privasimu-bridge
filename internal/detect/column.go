@@ -77,8 +77,11 @@ func (s *ColumnSampler) Add(value string, null bool) {
 		if m, ok := ClassifyValue(v, s.hints); ok {
 			s.matches[m.Category]++
 			s.strength[m.Category] += m.Strength
+			return
 		}
-		return
+		if !strings.ContainsAny(v, " \t,;:") {
+			return // a single token that is not an identifier
+		}
 	}
 	// Free text: count the value once for each kind of identifier it contains.
 	tc := NewTextCounter(maxValueBytes)
