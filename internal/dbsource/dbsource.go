@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/netguard"
@@ -333,9 +334,11 @@ func (t Target) schemaAllowed(schema string) bool {
 	return false
 }
 
-// validName refuses names that cannot be sent to the platform or quoted safely.
+// validName refuses names that cannot be sent to the platform or quoted safely: empty,
+// longer than 255 bytes, with control characters, or not valid UTF-8 (the Laravel client
+// rejects a whole response that is not valid UTF-8; the Go client would see U+FFFD).
 func validName(s string) bool {
-	if s == "" || len(s) > 255 {
+	if s == "" || len(s) > 255 || !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {

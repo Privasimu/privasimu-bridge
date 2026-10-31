@@ -6,12 +6,23 @@ package server
 // rules below are copied from that code: the request body (db_type plus the mapped
 // fields), the headers, the status-to-kind mapping, the retry rules, the response checks,
 // the 4 MiB cap, the limits (500 tables, 1000 columns) and the concurrency of 4.
+//
+// The two platform lines send and read the same contract, but not the same bytes; line
+// selects which one is replayed:
+//   - lineGo: encoding/json body (keys sorted), Go's transport adds Accept-Encoding: gzip,
+//     column calls in a sliding window of 4, typed JSON decoding (invalid UTF-8 becomes
+//     U+FFFD).
+//   - lineLaravel: json_encode body (db_type first, then registry order; "/" and
+//     non-ASCII escaped), no Accept-Encoding (decode_content false), column calls in
+//     chunks of 4 that each wait for the slowest call (Http::pool over array_chunk),
+//     json_decode that rejects a whole response containing invalid UTF-8.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -20,7 +31,83 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 )
+
+const (
+	lineGo      = "go"
+	lineLaravel = "laravel"
+)
+
+// laravelOrder is the order in which BridgeClient.php builds the body: db_type, the
+// registry fields (relational fields, then the type's extras) and table_name last.
+var laravelOrder = []string{"db_type", "host", "port", "database", "user", "password", "schema_name", "use_ssl",
+	"instance_name", "odbc_driver", "trust_server_certificate", "service_name", "sid", "warehouse", "role", "table_name"}
+
+// phpString encodes s the way PHP's json_encode does with default flags: "/" is escaped
+// and every non-ASCII character becomes \uXXXX (UTF-16, with surrogate pairs).
+func phpString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '/':
+			b.WriteString(`\/`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		case r < 0x80:
+			b.WriteRune(r)
+		default:
+			for _, u := range utf16.Encode([]rune{r}) {
+				fmt.Fprintf(&b, `\u%04x`, u)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// phpBody encodes a request body as Laravel sends it.
+func phpBody(body map[string]any) []byte {
+	var b strings.Builder
+	b.WriteByte('{')
+	first := true
+	for _, k := range laravelOrder {
+		v, ok := body[k]
+		if !ok {
+			continue
+		}
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		b.WriteString(phpString(k))
+		b.WriteByte(':')
+		switch t := v.(type) {
+		case string:
+			b.WriteString(phpString(t))
+		case int:
+			b.WriteString(strconv.Itoa(t))
+		case bool:
+			b.WriteString(strconv.FormatBool(t))
+		default:
+			panic(fmt.Sprintf("unexpected body value %T", v))
+		}
+	}
+	b.WriteByte('}')
+	return []byte(b.String())
+}
 
 const (
 	pcMaxResponse = 4 << 20
@@ -91,6 +178,24 @@ type platformClient struct {
 	deadline    time.Duration
 	retryDelay  time.Duration
 	concurrency int
+	line        string
+}
+
+// forLine returns a copy of the client that behaves like one platform line. The Laravel
+// client gets a transport without automatic compression, so no Accept-Encoding is sent.
+func (p *platformClient) forLine(line string) *platformClient {
+	c := *p
+	c.line = line
+	if line == lineLaravel {
+		if tr, ok := p.client.Transport.(*http.Transport); ok {
+			tr2 := tr.Clone()
+			tr2.DisableCompression = true
+			hc := *p.client
+			hc.Transport = tr2
+			c.client = &hc
+		}
+	}
+	return &c
 }
 
 type pcFailure struct {
@@ -180,6 +285,9 @@ func (p *platformClient) body(sourceType string, cfg map[string]any) (map[string
 
 func (p *platformClient) post(ctx context.Context, url, apiKey string, body map[string]any, out any) *pcFailure {
 	payload, _ := json.Marshal(body)
+	if p.line == lineLaravel {
+		payload = phpBody(body)
+	}
 	ctx, cancel := context.WithTimeout(ctx, p.callTimeout)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
@@ -215,6 +323,9 @@ func (p *platformClient) post(ctx context.Context, url, apiKey string, body map[
 	}
 	if len(data) > pcMaxResponse {
 		return &pcFailure{kind: pcKindContract}
+	}
+	if p.line == lineLaravel && !utf8.Valid(data) {
+		return &pcFailure{kind: pcKindContract} // json_decode: JSON_ERROR_UTF8
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return &pcFailure{kind: pcKindContract}
@@ -349,6 +460,9 @@ func (p *platformClient) Scan(ctx context.Context, base, key, sourceType string,
 	sem := make(chan struct{}, p.concurrency)
 	var wg sync.WaitGroup
 	for i, name := range names {
+		if p.line == lineLaravel && i > 0 && i%p.concurrency == 0 {
+			wg.Wait() // Http::pool over array_chunk: the next chunk starts when this one ends
+		}
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(i int, name string) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/detect"
@@ -77,14 +78,22 @@ func (t TableAnalysis) PIIColumns() (pii, pdp int) {
 	return pii, pdp
 }
 
-// ListTables returns at most MaxTables tables and the total number found.
+// ListTables returns at most MaxTables tables and the total number found. Tables whose
+// reported name the platform cannot store are left out but counted in the total, so the
+// platform marks the listing incomplete instead of rejecting it.
 func ListTables(ctx context.Context, c dbsource.Conn, o DBOptions) ([]dbsource.Table, int, error) {
-	tables, err := c.ListTables(ctx, o.Schema)
+	listed, err := c.ListTables(ctx, o.Schema)
 	if err != nil {
 		return nil, 0, err
 	}
-	total := len(tables)
-	if total > o.maxTables() {
+	total := len(listed)
+	tables := listed[:0:0]
+	for _, t := range listed {
+		if platformSafe(t.Ref) {
+			tables = append(tables, t)
+		}
+	}
+	if len(tables) > o.maxTables() {
 		tables = tables[:o.maxTables()]
 	}
 	return tables, total, nil
@@ -153,11 +162,11 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 	return res, nil
 }
 
-// platformSafe reports whether the platform accepts a name: 1 to 255 bytes without
-// control characters. One bad column name would make the platform reject the whole
+// platformSafe reports whether the platform accepts a name: 1 to 255 bytes of valid UTF-8
+// without control characters. One bad column name would make the platform reject the whole
 // table, so such columns are left out and counted.
 func platformSafe(s string) bool {
-	if s == "" || len(s) > 255 {
+	if s == "" || len(s) > 255 || !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {

@@ -158,6 +158,33 @@ func forwardedClient(peer netip.Addr, header string, trusted []netip.Prefix) net
 	return peer
 }
 
+// refusalLog reports a refused address at most once per interval, so a scanner cannot
+// flood the log.
+type refusalLog struct {
+	mu    sync.Mutex
+	every time.Duration
+	last  map[string]time.Time
+}
+
+func newRefusalLog(every time.Duration) *refusalLog {
+	return &refusalLog{every: every, last: map[string]time.Time{}}
+}
+
+// first reports whether ip should be logged now.
+func (r *refusalLog) first(ip string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if t, ok := r.last[ip]; ok && now.Sub(t) < r.every {
+		return false
+	}
+	if len(r.last) > 10000 {
+		r.last = map[string]time.Time{}
+	}
+	r.last[ip] = now
+	return true
+}
+
 // filteredListener closes connections from addresses that are not allowed before any
 // TLS handshake, so the bridge does not even reveal itself to them.
 type filteredListener struct {

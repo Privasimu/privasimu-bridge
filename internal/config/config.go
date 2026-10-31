@@ -337,10 +337,10 @@ func (c *Config) applyDefaults() {
 		l.MaxBodyBytes = 64 << 10
 	}
 	if l.RatePerSecond <= 0 {
-		l.RatePerSecond = 20
+		l.RatePerSecond = 100
 	}
 	if l.Burst <= 0 {
-		l.Burst = 60
+		l.Burst = 400
 	}
 	if l.MaxConcurrent <= 0 {
 		l.MaxConcurrent = 16

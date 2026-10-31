@@ -58,8 +58,8 @@ server:
   file_endpoints: false
   limits:
     max_body_bytes: 64KiB
-    rate_per_second: 20             # per client address
-    burst: 60
+    rate_per_second: 100            # per client address; a scan sends up to 4 calls at once
+    burst: 400
     max_concurrent: 16              # requests at once; more get 503
     per_source_concurrency: 4       # Privasimu sends at most 4 at once
     request_timeout: 25s            # Privasimu waits 30 s per call

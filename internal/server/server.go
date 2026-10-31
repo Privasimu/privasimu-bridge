@@ -373,8 +373,14 @@ func (s *Server) Run(ctx context.Context) error {
 			raw.Close()
 			return err
 		}
+		// Refused connections are closed before the TLS handshake. The platform then reports a
+		// network error (Go line: bridge_unavailable) or, through curl, a TLS error (Laravel
+		// line: tls), so the refusal is logged where the operator will look for it.
+		refusals := newRefusalLog(time.Minute)
 		filtered := filteredListener{Listener: raw, allowed: s.allowedClients, refused: func(a netip.Addr) {
-			s.log.Debug("connection refused by allowed_clients", "client_ip", a.String())
+			if refusals.first(a.String()) {
+				s.log.Warn("connection refused: the address is not in server.allowed_clients", "client_ip", a.String())
+			}
 		}}
 		ln = tls.NewListener(filtered, tlsCfg)
 	}

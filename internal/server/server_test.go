@@ -86,6 +86,30 @@ type harness struct {
 	keyID     string
 	auditPath string
 	pc        *platformClient
+
+	mu       sync.Mutex
+	received []received
+}
+
+// received is a request as the bridge saw it.
+type received struct {
+	header http.Header
+	body   []byte
+	proto  string
+}
+
+func (h *harness) record(r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	h.mu.Lock()
+	h.received = append(h.received, received{header: r.Header.Clone(), body: body, proto: r.Proto})
+	h.mu.Unlock()
+}
+
+func (h *harness) requests() []received {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]received(nil), h.received...)
 }
 
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
@@ -123,15 +147,20 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewUnstartedServer(s)
+	h := &harness{t: t, cfg: cfg, srv: s, db: db, key: key, keyID: id, auditPath: auditPath}
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.record(r)
+		s.ServeHTTP(w, r)
+	}))
 	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
 	ts.StartTLS()
 	t.Cleanup(ts.Close)
 	client := ts.Client()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &harness{t: t, cfg: cfg, srv: s, ts: ts, db: db, key: key, keyID: id, auditPath: auditPath,
-		pc: &platformClient{client: client, callTimeout: 5 * time.Second, deadline: 30 * time.Second,
-			retryDelay: time.Millisecond, concurrency: 4}}
+	h.ts = ts
+	h.pc = &platformClient{client: client, callTimeout: 5 * time.Second, deadline: 30 * time.Second,
+		retryDelay: time.Millisecond, concurrency: 4, line: lineGo}
+	return h
 }
 
 // source is the connection_config the platform stores for a bridge source.
