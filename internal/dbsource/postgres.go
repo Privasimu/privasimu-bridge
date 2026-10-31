@@ -3,6 +3,7 @@ package dbsource
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -90,12 +91,15 @@ func (pgDialect) beginSample(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 }
 
 func openPostgres(ctx context.Context, t Target) (Conn, error) {
+	if t.Port < 1 || t.Port > 65535 {
+		return nil, &Error{Kind: KindConfig, Op: "config", Cause: errors.New("port out of range"), Safe: true}
+	}
 	cfg, err := pgx.ParseConfig("sslmode=disable")
 	if err != nil {
 		return nil, wrap("config", err, true)
 	}
 	cfg.Host = t.Host
-	cfg.Port = uint16(t.Port)
+	cfg.Port = uint16(t.Port) // #nosec G115 -- checked above
 	cfg.Database = t.Database
 	cfg.User = t.Username
 	cfg.Password = t.Password.Reveal()
@@ -117,7 +121,7 @@ func openPostgres(ctx context.Context, t Target) (Conn, error) {
 	var tlsOn *bool
 	switch t.TLS.Mode {
 	case config.DBTLSPrefer:
-		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: t.Host, Port: uint16(t.Port)}}
+		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: t.Host, Port: uint16(t.Port)}} // #nosec G115 -- checked above
 	case config.DBTLSDisable, "":
 		off := false
 		tlsOn = &off

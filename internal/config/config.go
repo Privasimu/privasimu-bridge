@@ -246,7 +246,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(abs)
+	f, err := os.Open(abs) // #nosec G304 -- the configuration file chosen by the operator
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w: %s", ErrNotFound, abs)

@@ -94,7 +94,7 @@ func CreateKeyFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- key file path from the local configuration
 	if err != nil {
 		return err
 	}
@@ -152,8 +152,10 @@ func decodeKey(text string) ([]byte, error) {
 	return nil, ErrBadKey
 }
 
+// readLimited reads a local file named by the configuration or the operator (never by
+// the network) up to max bytes.
 func readLimited(path string, max int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 G703 -- local configuration path
 	if err != nil {
 		return nil, err
 	}

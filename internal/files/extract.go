@@ -219,7 +219,8 @@ var errTooMuchText = errors.New("document text limit reached")
 
 // xmlText streams the character data of the text elements of one zip entry.
 func xmlText(w io.Writer, f *zip.File, maxEntry int64, budget *int64, rules elementRules) error {
-	if int64(f.UncompressedSize64) > maxEntry {
+	// Compared as unsigned: a forged size above MaxInt64 must not wrap to a negative number.
+	if maxEntry < 0 || f.UncompressedSize64 > uint64(maxEntry) {
 		return errTooMuchText
 	}
 	rc, err := f.Open()

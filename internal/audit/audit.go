@@ -84,7 +84,8 @@ func (l *Logger) open() error {
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o750); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
+	// Readable by the group so that a log shipper (SIEM) in the service group can read it.
+	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640) // #nosec G302 -- see above
 	if err != nil {
 		return err
 	}

@@ -154,7 +154,8 @@ func (a *app) logger(cfg *config.Config, service bool) (*slog.Logger, func(), er
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return nil, nil, err
 		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
+		// Readable by the group so that a log shipper in the service group can read it.
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640) // #nosec G302 G304 -- configured log path
 		if err != nil {
 			return nil, nil, err
 		}

@@ -49,7 +49,7 @@ func openMongo(ctx context.Context, t Target) (Conn, error) {
 	opts.SetConnectTimeout(t.Timeout)
 	opts.SetServerSelectionTimeout(t.Timeout)
 	opts.SetTimeout(t.Timeout)
-	opts.SetMaxPoolSize(uint64(t.MaxOpen))
+	opts.SetMaxPoolSize(uint64(max(1, min(t.MaxOpen, 64)))) // #nosec G115 -- bounded to 1..64
 	// Reading from a secondary keeps the load off the primary.
 	opts.SetReadPreference(readpref.SecondaryPreferred())
 	var tlsOn *bool
@@ -141,7 +141,7 @@ func (c *mongoConn) FindTable(ctx context.Context, ref, _ string) (Table, bool, 
 func (c *mongoConn) readDocs(ctx context.Context, t Table, n int, fn func(bson.Raw)) error {
 	qctx, cancel := context.WithTimeout(ctx, c.t.Timeout)
 	defer cancel()
-	cur, err := c.db.Collection(t.Name).Find(qctx, bson.D{}, options.Find().SetLimit(int64(n)).SetBatchSize(int32(min(n, 1000))))
+	cur, err := c.db.Collection(t.Name).Find(qctx, bson.D{}, options.Find().SetLimit(int64(n)).SetBatchSize(int32(min(n, 1000)))) // #nosec G115 -- at most 1000
 	if err != nil {
 		return err
 	}

@@ -27,7 +27,10 @@ func dpapi(data []byte, seal bool) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, ErrBadKey
 	}
-	in := windows.DataBlob{Size: uint32(len(data)), Data: &data[0]}
+	if len(data) > 1<<20 {
+		return nil, ErrBadKey
+	}
+	in := windows.DataBlob{Size: uint32(len(data)), Data: &data[0]} // #nosec G115 -- at most 1 MiB
 	var out windows.DataBlob
 	var err error
 	flags := uint32(windows.CRYPTPROTECT_UI_FORBIDDEN)

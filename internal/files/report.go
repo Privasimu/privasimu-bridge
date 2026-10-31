@@ -160,7 +160,7 @@ func FileID(key []byte, rootID, rel string) string {
 // first use with owner-only permissions.
 func LoadOrCreateKey(stateDir string) ([]byte, error) {
 	p := filepath.Join(stateDir, "file-id.key")
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) // #nosec G304 -- inside the configured state directory
 	if err == nil {
 		key, derr := hex.DecodeString(string(trimNL(data)))
 		if derr == nil && len(key) == 32 {

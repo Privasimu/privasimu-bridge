@@ -85,7 +85,7 @@ const (
 // LoadState reads the enrollment state.
 func LoadState(stateDir string) (State, error) {
 	var s State
-	data, err := os.ReadFile(filepath.Join(stateDir, stateFile))
+	data, err := os.ReadFile(filepath.Join(stateDir, stateFile)) // #nosec G304 -- inside the configured state directory
 	if err != nil {
 		return s, err
 	}
@@ -96,7 +96,7 @@ func LoadState(stateDir string) (State, error) {
 // LoadStatus reads the last status written by a running agent.
 func LoadStatus(stateDir string) (Status, error) {
 	var s Status
-	data, err := os.ReadFile(filepath.Join(stateDir, statusFile))
+	data, err := os.ReadFile(filepath.Join(stateDir, statusFile)) // #nosec G304 -- inside the configured state directory
 	if err != nil {
 		return s, err
 	}
@@ -210,7 +210,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			backoff = min(backoff*2, maxPoll)
 		}
 		wait = min(max(wait, minPoll), maxPoll)
-		wait += time.Duration(rand.Int64N(int64(wait)/10 + 1)) // jitter so agents do not poll in step
+		// Jitter so that agents do not poll in step; not a security value.
+		wait += time.Duration(rand.Int64N(int64(wait)/10 + 1)) // #nosec G404
 		if !a.sleep(ctx, wait) {
 			break
 		}
