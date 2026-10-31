@@ -35,7 +35,8 @@ All are permissive licences except **MPL-2.0** for the MySQL driver. MPL-2.0 is 
 file-level copyleft: the bridge uses the driver unmodified, so the obligation is to keep
 the driver's own source files available under MPL-2.0 (they are public at
 https://github.com/go-sql-driver/mysql). If the driver is ever modified, the modified
-files must be published under MPL-2.0. No module is vendored into this repository.
+files must be published under MPL-2.0. No module source is copied into this repository;
+modules are fetched by `go mod download` and checked against `go.sum`.
 
 Security status at the same date: `govulncheck ./...` reports no vulnerability reachable
 from the code. It lists one module-level advisory, GO-2026-5932 (the unmaintained
