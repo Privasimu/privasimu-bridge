@@ -108,10 +108,10 @@ func TestClassifyDriverErrors(t *testing.T) {
 		}
 	}
 	for msg, want := range map[string]string{
-		"ORA-01017: invalid username/password; logon denied": KindAuth,
+		"ORA-01017: invalid username/password; logon denied":         KindAuth,
 		"ORA-12514: TNS:listener does not currently know of service": KindNotFound,
-		"ORA-01031: insufficient privileges":                       KindPermission,
-		"ORA-12170: TNS:Connect timeout occurred":                  KindUnreachable,
+		"ORA-01031: insufficient privileges":                         KindPermission,
+		"ORA-12170: TNS:Connect timeout occurred":                    KindUnreachable,
 	} {
 		if got := classify(errors.New(msg)); got != want {
 			t.Errorf("%q = %s, want %s", msg, got, want)
@@ -193,7 +193,7 @@ type countingConn struct {
 	closed atomic.Bool
 }
 
-func (c *countingConn) Engine() string                    { return "postgresql" }
+func (c *countingConn) Engine() string                       { return "postgresql" }
 func (c *countingConn) ServerVersion(context.Context) string { return "" }
 func (c *countingConn) DefaultSchema() string                { return "public" }
 func (c *countingConn) ListTables(context.Context, string) ([]Table, error) {

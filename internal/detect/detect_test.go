@@ -164,20 +164,20 @@ func TestHintsFromWords(t *testing.T) {
 
 func TestTokens(t *testing.T) {
 	cases := map[string]string{
-		"nomor_ktp":         "nomor ktp",
-		"NoKTP":             "no ktp",
-		"customerEmail":     "customer email",
-		"customeremail":     "customer email",
-		"TGL_LAHIR":         "tgl lahir",
-		"tgllahir":          "tgl lahir",
-		"NIKNumber":         "nik number",
-		"email2":            "email 2",
-		"namaibukandung":    "nama ibu kandung",
-		"tanggal_simpan":    "tanggal simpan",
-		"company":           "company",
-		"address-line-1":    "address line 1",
-		"Nomor Rekening":    "nomor rekening",
-		"PhoneNumber":       "phone number",
+		"nomor_ktp":          "nomor ktp",
+		"NoKTP":              "no ktp",
+		"customerEmail":      "customer email",
+		"customeremail":      "customer email",
+		"TGL_LAHIR":          "tgl lahir",
+		"tgllahir":           "tgl lahir",
+		"NIKNumber":          "nik number",
+		"email2":             "email 2",
+		"namaibukandung":     "nama ibu kandung",
+		"tanggal_simpan":     "tanggal simpan",
+		"company":            "company",
+		"address-line-1":     "address line 1",
+		"Nomor Rekening":     "nomor rekening",
+		"PhoneNumber":        "phone number",
 		"simpanan_berjangka": "simpanan berjangka",
 	}
 	for in, want := range cases {
@@ -197,7 +197,7 @@ func TestClassifyName(t *testing.T) {
 		"passport_no": Passport, "no_paspor": Passport,
 		"no_sim": DrivingLicense, "driver_license_number": DrivingLicense,
 		"no_bpjs": BPJSKesehatan, "bpjs_kesehatan": BPJSKesehatan, "no_kpj": BPJSKetenagakerjaan,
-		"bpjs_tk": BPJSKetenagakerjaan,
+		"bpjs_tk":     BPJSKetenagakerjaan,
 		"card_number": CardNumber, "cc_no": CardNumber, "nomor_kartu": CardNumber, "cvv": CardNumber, "pan": CardNumber,
 		"account_number": BankAccount, "no_rekening": BankAccount, "norek": BankAccount, "iban": BankAccount,
 		// Other specific data.

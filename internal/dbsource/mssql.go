@@ -69,7 +69,9 @@ func (msDialect) sampleable(t string) bool {
 	return typeHas(t, "char", "varchar", "nchar", "nvarchar", "text", "ntext", "bigint", "decimal", "numeric")
 }
 
-func (d msDialect) selectExpr(c Column) string { return "CONVERT(NVARCHAR(4000), " + d.quote(c.Name) + ")" }
+func (d msDialect) selectExpr(c Column) string {
+	return "CONVERT(NVARCHAR(4000), " + d.quote(c.Name) + ")"
+}
 
 func (msDialect) sampleQuery(table string, exprs []string, rows int) (string, []any) {
 	return "SELECT TOP (@p1) " + strings.Join(exprs, ", ") + " FROM " + table, []any{rows}

@@ -165,12 +165,12 @@ func TestExtractorsCountIdentifiers(t *testing.T) {
 		byPath[f.Path] = f
 	}
 	expect := map[string]map[detect.Category]int{
-		"karyawan.csv":       {detect.NIK: 1, detect.Phone: 1},
-		"data.json":          {detect.NIK: 1, detect.Email: 1},
-		"utf16.txt":          {detect.Phone: 1},
-		"surat.docx":         {detect.NIK: 1, detect.Phone: 1},
-		"rekap.xlsx":         {detect.NIK: 2, detect.Email: 1},
-		"scan/formulir.pdf":  {detect.NIK: 1, detect.Email: 1},
+		"karyawan.csv":      {detect.NIK: 1, detect.Phone: 1},
+		"data.json":         {detect.NIK: 1, detect.Email: 1},
+		"utf16.txt":         {detect.Phone: 1},
+		"surat.docx":        {detect.NIK: 1, detect.Phone: 1},
+		"rekap.xlsx":        {detect.NIK: 2, detect.Email: 1},
+		"scan/formulir.pdf": {detect.NIK: 1, detect.Email: 1},
 	}
 	for path, want := range expect {
 		got, ok := byPath[path]
