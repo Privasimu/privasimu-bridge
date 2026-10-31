@@ -56,11 +56,10 @@ func (a *app) cmdInit(args []string) error {
 			return err
 		}
 	}
-	secretsFile := filepath.Join(abs, "secrets.enc")
-	if runtime.GOOS != "windows" && (abs == "/etc/privasimu-bridge" || *stateFlag != "") {
-		// The service writes the store when the agent token rotates; /etc stays read-only.
-		secretsFile = filepath.Join(stateDir, "secrets.enc")
-	}
+	// The store lives in the state folder: the service writes it when the agent token
+	// rotates, while the configuration folder stays read-only for the service account.
+	// Its key stays next to the configuration.
+	secretsFile := filepath.Join(stateDir, "secrets.enc")
 	for _, d := range []string{abs, filepath.Join(abs, "tls"), stateDir, logDir} {
 		if err := os.MkdirAll(d, 0o750); err != nil {
 			return err

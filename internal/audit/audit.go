@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/privasimu/bridge/internal/fsutil"
 )
 
 // Event is one audit record.
@@ -85,9 +87,14 @@ func (l *Logger) open() error {
 		return err
 	}
 	// Readable by the group so that a log shipper (SIEM) in the service group can read it.
+	_, statErr := os.Stat(l.path)
 	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640) // #nosec G302 -- see above
 	if err != nil {
 		return err
+	}
+	if statErr != nil {
+		// A new file created by a command run with sudo must stay writable by the service.
+		fsutil.InheritOwner(l.path, "")
 	}
 	st, err := f.Stat()
 	if err != nil {

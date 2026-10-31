@@ -18,6 +18,7 @@ import (
 
 	"github.com/privasimu/bridge/internal/audit"
 	"github.com/privasimu/bridge/internal/config"
+	"github.com/privasimu/bridge/internal/fsutil"
 	"github.com/privasimu/bridge/internal/i18n"
 	"github.com/privasimu/bridge/internal/secrets"
 )
@@ -155,9 +156,13 @@ func (a *app) logger(cfg *config.Config, service bool) (*slog.Logger, func(), er
 			return nil, nil, err
 		}
 		// Readable by the group so that a log shipper in the service group can read it.
+		_, statErr := os.Stat(path)
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640) // #nosec G302 G304 -- configured log path
 		if err != nil {
 			return nil, nil, err
+		}
+		if statErr != nil {
+			fsutil.InheritOwner(path, "")
 		}
 		w, closeFn = f, func() { _ = f.Close() }
 	}

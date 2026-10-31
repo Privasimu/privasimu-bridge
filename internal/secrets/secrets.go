@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/privasimu/bridge/internal/config"
+	"github.com/privasimu/bridge/internal/fsutil"
 )
 
 // Value is a resolved secret. Use Reveal only where the value is handed to a driver or
@@ -329,6 +330,13 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return err
 	}
+	// Keep the owner of the file being replaced (or of the folder), so that a command run
+	// with sudo does not leave a root-owned file the service can no longer read.
+	previous := ""
+	if _, err := os.Stat(path); err == nil {
+		previous = path
+	}
+	fsutil.InheritOwner(name, previous)
 	if err := os.Rename(name, path); err != nil {
 		cleanup()
 		return err
