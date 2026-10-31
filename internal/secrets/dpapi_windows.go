@@ -1,0 +1,46 @@
+//go:build windows
+
+package secrets
+
+import (
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+const (
+	dpapiAvailable = true
+	isWindows      = true
+)
+
+// protect seals data with DPAPI in machine scope: any process on this machine can unseal
+// it, no other machine can. The file ACL set by init limits who can read the file.
+func protect(data []byte) ([]byte, error) {
+	return dpapi(data, true)
+}
+
+func unprotect(data []byte) ([]byte, error) {
+	return dpapi(data, false)
+}
+
+func dpapi(data []byte, seal bool) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, ErrBadKey
+	}
+	in := windows.DataBlob{Size: uint32(len(data)), Data: &data[0]}
+	var out windows.DataBlob
+	var err error
+	flags := uint32(windows.CRYPTPROTECT_UI_FORBIDDEN)
+	if seal {
+		err = windows.CryptProtectData(&in, nil, nil, 0, nil, flags|windows.CRYPTPROTECT_LOCAL_MACHINE, &out)
+	} else {
+		err = windows.CryptUnprotectData(&in, nil, nil, 0, nil, flags, &out)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
+	result := make([]byte, out.Size)
+	copy(result, unsafe.Slice(out.Data, out.Size))
+	return result, nil
+}
