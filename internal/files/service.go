@@ -107,6 +107,18 @@ func (s *Service) Roots() []RootInfo {
 	return out
 }
 
+// Describe lists the usable roots without reading their reports (for the agent inventory,
+// which is built on every poll).
+func (s *Service) Describe() []RootInfo {
+	out := make([]RootInfo, 0, len(s.order))
+	for _, id := range s.order {
+		r := s.roots[id]
+		out = append(out, RootInfo{ID: id, Label: r.Label, ContentScan: r.cfg.ContentScan == nil || *r.cfg.ContentScan,
+			PathMode: r.cfg.ReportPaths})
+	}
+	return out
+}
+
 // Root returns a usable root.
 func (s *Service) Root(id string) (*Root, bool) {
 	r, ok := s.roots[id]

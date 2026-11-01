@@ -178,7 +178,12 @@ func (a *Agent) keepLease(ctx context.Context, job Job, prog *progressState, can
 		resp, err := a.client.Progress(pctx, job, prog.request())
 		pcancel()
 		if err != nil {
-			if code := codeOf(err); code == ErrLeaseExpired || code == ErrJobNotFound || code == ErrForbidden {
+			// The job is over for the platform: its lease is gone, the organisation is
+			// refused, or the agent's token no longer works. Revocation fails the agent's jobs
+			// on the platform (agent_revoked), so finishing the scan would only waste the
+			// source's time.
+			switch codeOf(err) {
+			case ErrLeaseExpired, ErrJobNotFound, ErrForbidden, ErrAgentRevoked, ErrUnauthenticated:
 				lost.Store(true)
 				cancel()
 				return

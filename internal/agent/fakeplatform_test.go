@@ -1,8 +1,18 @@
 package agent
 
-// fakePlatform implements the platform side of agent protocol 1 in memory, as specified in
-// docs/DESIGN.md, so that the agent can be tested before Laravel and Go implement it. It
-// records every request body to check that nothing but metadata leaves the agent.
+// fakePlatform implements the platform side of agent protocol 1 in memory, following
+// docs/AGENT-PROTOCOL.md and what both platform lines (Laravel and Go) implement, so the
+// agent is tested against the same rules:
+//
+//   - the field rules of section 5: a request either line refuses is 400 invalid_request
+//     here too, and every test fails when the agent sent one (see newFakePlatform);
+//   - token rotation: the current token becomes the previous one, valid 600 seconds, and
+//     a poll authenticated with the previous token answers token_rotation_requested: true
+//     (the agent lost the answer of its last rotation);
+//   - revocation keeps the token hashes, so a revoked agent gets 401 agent_revoked, and
+//     the organisation check after authentication answers 403 forbidden.
+//
+// It records every request body to check that nothing but metadata leaves the agent.
 
 import (
 	"bytes"
@@ -14,10 +24,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type fakeJob struct {
@@ -34,34 +49,56 @@ type fakePlatform struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu                  sync.Mutex
-	enrollToken         string
-	agentToken          string
-	prevToken           string
-	agentID             string
-	queue               []Job
-	jobs                map[string]*fakeJob
-	sources             *SourcesRequest
-	bodies              [][]byte
-	polls               int
-	revoked             bool
-	inventoryRequested  bool
-	failPartsOnce       bool
-	partFailures        int
-	expireLeases        bool
-	cancelJobs          bool
-	rotateRequested     bool
-	protocolHeaderSeen  bool
-	unauthorizedPolling int
+	mu          sync.Mutex
+	enrollToken string
+	agentToken  string
+	prevToken   string
+	prevUntil   time.Time
+	// issued numbers the agent tokens: pvba_placeholder-token-1 at enrollment, then -2, -3
+	// for each rotation.
+	issued  int
+	agentID string
+	queue   []Job
+	jobs    map[string]*fakeJob
+	sources *SourcesRequest
+	bodies  [][]byte
+	polls   int
+	// pollTokens counts polls by the agent token that authenticated them.
+	pollTokens map[string]int
+	// previousPolls counts polls authenticated with the previous token.
+	previousPolls int
+	rotations     int
+	// dropRotateAnswers loses that many rotation answers: the rotation is stored, then the
+	// connection is closed without an answer.
+	dropRotateAnswers int
+	revoked           bool
+	// forbidden makes the organisation check after authentication refuse the agent.
+	forbidden          bool
+	inventoryRequested bool
+	failPartsOnce      bool
+	partFailures       int
+	expireLeases       bool
+	cancelJobs         bool
+	rotateRequested    bool
+	protocolHeaderSeen bool
+	refusedAuth        int
+	// invalid counts requests answered 400 invalid_request.
+	invalid atomic.Int32
 }
 
 func newFakePlatform(t *testing.T) *fakePlatform {
 	f := &fakePlatform{t: t, enrollToken: "pvbe_placeholder-enrollment", agentID: "9b2f6c1e-0000-4000-8000-000000000001",
-		jobs: map[string]*fakeJob{}}
+		jobs: map[string]*fakeJob{}, pollTokens: map[string]int{}}
 	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
 	f.srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	f.srv.StartTLS()
 	t.Cleanup(f.srv.Close)
+	// Every test also checks that the agent never sent a request the platforms refuse.
+	t.Cleanup(func() {
+		if n := f.invalid.Load(); n > 0 {
+			t.Errorf("the platform answered %d request(s) of the agent with 400 invalid_request", n)
+		}
+	})
 	return f
 }
 
@@ -83,6 +120,12 @@ func (f *fakePlatform) job(id string) *fakeJob {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.jobs[id]
+}
+
+// issue returns the next agent token; f.mu is held.
+func (f *fakePlatform) issue() string {
+	f.issued++
+	return "pvba_placeholder-token-" + strconv.Itoa(f.issued)
 }
 
 // protocolErrors is docs/agent-protocol/errors.json: the normative status and message of
@@ -148,6 +191,14 @@ func apiErr(w http.ResponseWriter, status int, code string) {
 	_, _ = w.Write(canonical(body))
 }
 
+// refuse answers with an error code at the status errors.json gives it.
+func (f *fakePlatform) refuse(w http.ResponseWriter, code string) {
+	if code == ErrInvalidRequest {
+		f.invalid.Add(1)
+	}
+	apiErr(w, protocolErrors[code].Status, code)
+}
+
 func reply(w http.ResponseWriter, status int, v any) {
 	headers(w)
 	w.WriteHeader(status)
@@ -163,7 +214,8 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Unlock()
 	path := strings.TrimPrefix(r.URL.Path, APIPrefix)
-	// Check order of docs/AGENT-PROTOCOL.md: protocol header, then content type.
+	// Check order of docs/AGENT-PROTOCOL.md section 4: protocol header, content type,
+	// authentication (with the organisation check), then the body and the resource.
 	if r.Header.Get("X-Bridge-Protocol") != "1" {
 		apiErr(w, 426, ErrProtocolUnsupported)
 		return
@@ -173,69 +225,38 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == PathEnroll && r.Method == http.MethodPost {
-		var req EnrollRequest
-		_ = json.Unmarshal(body, &req)
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if req.EnrollmentToken == "" || req.EnrollmentToken != f.enrollToken || req.Agent.Protocol != 1 {
-			apiErr(w, 401, ErrEnrollmentInvalid)
-			return
-		}
-		f.enrollToken = "" // single use
-		f.agentToken = "pvba_placeholder-token-1"
-		reply(w, 201, EnrollResponse{AgentID: f.agentID, AgentToken: f.agentToken, Organization: Org{Name: "PT Contoh"}, PollIntervalSeconds: 1})
+		f.enroll(w, body)
 		return
 	}
-	f.mu.Lock()
 	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	okToken := auth != "" && (auth == f.agentToken || auth == f.prevToken)
-	revoked := f.revoked
+	f.mu.Lock()
+	current := auth != "" && auth == f.agentToken
+	previous := !current && auth != "" && auth == f.prevToken && time.Now().Before(f.prevUntil)
+	code := ""
+	switch {
+	case !current && !previous:
+		code = ErrUnauthenticated
+	case f.revoked:
+		// Revocation keeps the token hashes, so a revoked agent learns why.
+		code = ErrAgentRevoked
+	case f.forbidden:
+		code = ErrForbidden
+	}
+	if code != "" {
+		f.refusedAuth++
+	}
 	f.mu.Unlock()
-	if !okToken || revoked {
-		f.mu.Lock()
-		f.unauthorizedPolling++
-		f.mu.Unlock()
-		code := ErrUnauthenticated
-		if revoked {
-			code = ErrAgentRevoked
-		}
-		apiErr(w, 401, code)
+	if code != "" {
+		f.refuse(w, code)
 		return
 	}
 	switch {
 	case path == PathPoll && r.Method == http.MethodPost:
-		var req PollRequest
-		if json.Unmarshal(body, &req) != nil {
-			apiErr(w, 400, ErrInvalidRequest)
-			return
-		}
-		f.mu.Lock()
-		f.polls++
-		n := min(req.MaxJobs, len(f.queue))
-		jobs := append([]Job(nil), f.queue[:n]...)
-		f.queue = f.queue[n:]
-		inv := f.inventoryRequested || f.sources == nil || f.sources.SourcesDigest != req.SourcesDigest
-		rot := f.rotateRequested
-		f.rotateRequested = false
-		f.mu.Unlock()
-		reply(w, 200, PollResponse{Jobs: jobs, NextPollSeconds: 1, InventoryRequested: inv, TokenRotationRequested: rot, ServerTime: time.Now().UTC()})
+		f.poll(w, body, auth, previous)
 	case path == PathSources && r.Method == http.MethodPut:
-		var req SourcesRequest
-		if json.Unmarshal(body, &req) != nil {
-			apiErr(w, 400, ErrInvalidRequest)
-			return
-		}
-		f.mu.Lock()
-		f.sources = &req
-		f.inventoryRequested = false
-		f.mu.Unlock()
-		reply(w, 200, SourcesResponse{Accepted: len(req.Sources)})
+		f.putSources(w, body)
 	case path == PathTokenRotate && r.Method == http.MethodPost:
-		f.mu.Lock()
-		f.prevToken, f.agentToken = f.agentToken, "pvba_placeholder-token-2"
-		tok := f.agentToken
-		f.mu.Unlock()
-		reply(w, 200, RotateResponse{AgentToken: tok, PreviousValidSeconds: 600})
+		f.rotate(w, body)
 	case strings.HasPrefix(path, pathJobs):
 		f.jobAction(w, r, strings.TrimPrefix(path, pathJobs), body)
 	default:
@@ -243,8 +264,117 @@ func (f *fakePlatform) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (f *fakePlatform) enroll(w http.ResponseWriter, body []byte) {
+	m, ok := object(body)
+	tok, _ := m["enrollment_token"].(string)
+	f.mu.Lock()
+	valid := ok && tok != "" && tok == f.enrollToken
+	f.mu.Unlock()
+	if !valid {
+		f.refuse(w, ErrEnrollmentInvalid)
+		return
+	}
+	info, _ := m["agent"].(map[string]any)
+	if code := agentInfoError(info); code != "" {
+		f.refuse(w, code)
+		return
+	}
+	f.mu.Lock()
+	f.enrollToken = "" // single use
+	f.agentToken = f.issue()
+	resp := EnrollResponse{AgentID: f.agentID, AgentToken: f.agentToken, Organization: Org{Name: "PT Contoh"}, PollIntervalSeconds: 1}
+	f.mu.Unlock()
+	reply(w, 201, resp)
+}
+
+func (f *fakePlatform) poll(w http.ResponseWriter, body []byte, token string, previous bool) {
+	m, ok := object(body)
+	if !ok {
+		f.refuse(w, ErrInvalidRequest)
+		return
+	}
+	if code := agentInfoError(m); code != "" {
+		f.refuse(w, code)
+		return
+	}
+	digest, isString := m["sources_digest"].(string)
+	// running_jobs echoes job ids of this fake, which the tests keep short instead of
+	// UUIDs, so only the shape of the list is checked.
+	if !isString || (digest != "" && !reDigest.MatchString(digest)) ||
+		!stringList(m["running_jobs"], 50, func(string) bool { return true }) || !integer(m["max_jobs"], 0, 10) {
+		f.refuse(w, ErrInvalidRequest)
+		return
+	}
+	maxJobs, _ := m["max_jobs"].(json.Number).Int64()
+	f.mu.Lock()
+	f.polls++
+	f.pollTokens[token]++
+	if previous {
+		f.previousPolls++
+	}
+	n := min(int(maxJobs), 4, len(f.queue))
+	jobs := append([]Job{}, f.queue[:n]...)
+	f.queue = f.queue[n:]
+	inv := f.inventoryRequested || f.sources == nil || f.sources.SourcesDigest != digest
+	// As both platform lines: also while the agent still uses its previous token, because
+	// then the answer of its last rotation was lost.
+	rot := f.rotateRequested || previous
+	f.mu.Unlock()
+	reply(w, 200, PollResponse{Jobs: jobs, NextPollSeconds: 1, InventoryRequested: inv, TokenRotationRequested: rot, ServerTime: time.Now().UTC()})
+}
+
+func (f *fakePlatform) putSources(w http.ResponseWriter, body []byte) {
+	m, ok := object(body)
+	if !ok || !validInventory(m) {
+		f.refuse(w, ErrInvalidRequest)
+		return
+	}
+	var req SourcesRequest
+	_ = json.Unmarshal(body, &req)
+	f.mu.Lock()
+	f.sources = &req
+	f.inventoryRequested = false
+	f.mu.Unlock()
+	reply(w, 200, SourcesResponse{Accepted: len(req.Sources)})
+}
+
+func (f *fakePlatform) rotate(w http.ResponseWriter, body []byte) {
+	if _, ok := object(body); !ok {
+		f.refuse(w, ErrInvalidRequest)
+		return
+	}
+	f.mu.Lock()
+	// As both platform lines: the current token becomes the previous one for 600 seconds,
+	// also when this request was authenticated with the previous token.
+	f.prevToken, f.prevUntil = f.agentToken, time.Now().Add(600*time.Second)
+	f.agentToken = f.issue()
+	f.rotateRequested = false
+	f.rotations++
+	tok := f.agentToken
+	drop := f.dropRotateAnswers > 0
+	if drop {
+		f.dropRotateAnswers--
+	}
+	f.mu.Unlock()
+	if drop {
+		// The rotation is stored, but its answer never reaches the agent.
+		panic(http.ErrAbortHandler)
+	}
+	reply(w, 200, RotateResponse{AgentToken: tok, PreviousValidSeconds: 600})
+}
+
 func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest string, body []byte) {
 	id, action, _ := strings.Cut(rest, "/")
+	// Step 8 (the body) comes before step 9 (the job and its lease).
+	m, ok := object(body)
+	if !ok || !validJobBody(action, m) {
+		if action == "progress" || action == "parts" || action == "complete" || action == "fail" {
+			f.refuse(w, ErrInvalidRequest)
+		} else {
+			apiErr(w, 404, ErrNotFound)
+		}
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j, ok := f.jobs[id]
@@ -287,10 +417,7 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 			return
 		}
 		var req PartRequest
-		if json.Unmarshal(body, &req) != nil || len(body) > 1<<20 {
-			apiErr(w, 400, ErrInvalidRequest)
-			return
-		}
+		_ = json.Unmarshal(body, &req)
 		if prev, dup := j.parts[req.Seq]; dup && sha256.Sum256(prev) != sha256.Sum256(body) {
 			apiErr(w, 409, ErrPartConflict)
 			return
@@ -300,6 +427,13 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 	case "complete":
 		var req CompleteRequest
 		_ = json.Unmarshal(body, &req)
+		// Exactly the parts 0 … parts-1.
+		for seq := range j.parts {
+			if seq >= req.Parts {
+				apiErr(w, 409, ErrPartsIncomplete)
+				return
+			}
+		}
 		for i := 0; i < req.Parts; i++ {
 			if _, ok := j.parts[i]; !ok {
 				apiErr(w, 409, ErrPartsIncomplete)
@@ -313,9 +447,140 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 		_ = json.Unmarshal(body, &req)
 		j.failed = &req
 		reply(w, 200, StatusResponse{Status: StatusFailed})
-	default:
-		apiErr(w, 404, ErrNotFound)
 	}
+}
+
+// ── the field rules of docs/AGENT-PROTOCOL.md section 5, as both platform lines apply them ──
+
+var (
+	reWord       = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
+	reErrorCode  = regexp.MustCompile(`^[a-z0-9_]{1,60}$`)
+	reID         = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+	reDigest     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	reCapability = regexp.MustCompile(`^[a-z0-9_:,.-]{1,64}$`)
+	reVersion    = regexp.MustCompile(`^[\x20-\x7e]{1,40}$`)
+)
+
+var sourceEngines = map[string][]string{
+	"database": {"postgresql", "mysql", "mssql", "oracle", "mongodb"},
+	"files":    {"filesystem"},
+}
+
+// object decodes a request body that must be one JSON object; numbers stay json.Number.
+func object(body []byte) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil || m == nil {
+		return nil, false
+	}
+	return m, true
+}
+
+// text is the protocol's text rule: valid UTF-8, min to max characters, no C0 control
+// character (U+0000-U+001F) and no DEL (U+007F). C1 characters are allowed.
+func text(v any, min, max int) bool {
+	s, ok := v.(string)
+	if !ok || !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	n := utf8.RuneCountInString(s)
+	return n >= min && n <= max
+}
+
+func word(v any, re *regexp.Regexp) bool {
+	s, ok := v.(string)
+	return ok && re.MatchString(s)
+}
+
+// stringList checks a JSON list (never null) of at most max strings that each pass ok.
+func stringList(v any, max int, ok func(string) bool) bool {
+	l, isList := v.([]any)
+	if !isList || len(l) > max {
+		return false
+	}
+	for _, e := range l {
+		if s, isString := e.(string); !isString || !ok(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// integer checks a JSON integer from min to max.
+func integer(v any, min, max int64) bool {
+	n, ok := v.(json.Number)
+	if !ok {
+		return false
+	}
+	i, err := n.Int64()
+	return err == nil && i >= min && i <= max
+}
+
+// agentInfoError checks the agent fields of enroll and poll: "" when they are valid.
+func agentInfoError(m map[string]any) string {
+	if !integer(m["protocol"], 1, 1) {
+		return ErrProtocolUnsupported
+	}
+	if !word(m["version"], reVersion) || !word(m["os"], reWord) || !word(m["arch"], reWord) ||
+		!stringList(m["capabilities"], 64, reCapability.MatchString) {
+		return ErrInvalidRequest
+	}
+	return ""
+}
+
+// validInventory checks a PUT /sources body (section 5.3).
+func validInventory(m map[string]any) bool {
+	sources, isList := m["sources"].([]any)
+	if !word(m["sources_digest"], reDigest) || !isList || len(sources) > 200 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, e := range sources {
+		s, isObject := e.(map[string]any)
+		if !isObject {
+			return false
+		}
+		id, _ := s["id"].(string)
+		kind, _ := s["kind"].(string)
+		engine, _ := s["engine"].(string)
+		if !reID.MatchString(id) || seen[id] || !slices.Contains(sourceEngines[kind], engine) || !text(s["label"], 1, 128) {
+			return false
+		}
+		seen[id] = true
+		if d := s["description"]; d != nil && !text(d, 0, 512) {
+			return false
+		}
+		if !stringList(s["capabilities"], 16, reCapability.MatchString) {
+			return false
+		}
+	}
+	return true
+}
+
+// validJobBody checks the body of a job route (sections 5.4 to 5.7).
+func validJobBody(action string, m map[string]any) bool {
+	switch action {
+	case "progress":
+		return integer(m["progress"], 0, 100) && word(m["stage"], reWord) &&
+			integer(m["done"], 0, 1_000_000_000) && integer(m["total"], 0, 1_000_000_000)
+	case "parts":
+		kind, _ := m["kind"].(string)
+		items, isList := m["items"].([]any)
+		return integer(m["seq"], 0, 499) && (kind == PartTables || kind == PartFiles) && isList && len(items) >= 1 && len(items) <= 1000
+	case "complete":
+		_, isObject := m["result"].(map[string]any)
+		return integer(m["parts"], 0, 500) && isObject
+	case "fail":
+		_, isBool := m["retryable"].(bool)
+		return word(m["error_kind"], reWord) && word(m["error_code"], reErrorCode) && isBool && word(m["stage"], reWord)
+	}
+	return false
 }
 
 // allBodies joins every request body received.
