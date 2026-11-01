@@ -459,7 +459,7 @@ service come only from the platform's tests and are marked as such.
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | ? |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | ? |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | ? |
-| 22 | Tests (contract, security, minimisation) | 113 test functions (122 with subtests, many table-driven), incl. both platform clients and a fake platform | ? |
+| 22 | Tests (contract, security, minimisation) | 125 test functions (137 with subtests, many table-driven), incl. both platform clients and a fake platform with both lines' field rules | ? |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | ? |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | ? |
 
