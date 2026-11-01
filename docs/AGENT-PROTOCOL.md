@@ -369,7 +369,11 @@ job of another agent or tenant: `404 job_not_found` (existence is never revealed
 When a job is leased: `status = leased`, `attempt = attempt + 1`, a new lease token,
 `lease_seconds = 120`, `lease_expires_at = now + 120 s`, `leased_at = now`. A lease that
 expires (no progress, part or result for 120 s) makes the job `queued` again when
-`attempt < 2`, otherwise `failed` with `error_code = agent_timeout`.
+`attempt < 2` (progress and stage reset, parts deleted), otherwise `failed` with
+`error_code = agent_timeout`. The job may then be leased to the same agent while its old
+run is still going (after an outage longer than the lease): the bridge recognises the job
+id with a new lease token, stops the old run without reporting, and runs the job again
+under the new lease.
 
 States: `queued → leased → completed | failed`; `leased → queued` (expired or retryable
 fail); `queued | leased → canceled` (admin); `failed` with `agent_revoked` when the agent
@@ -766,6 +770,9 @@ revocation); both lines then settled these points, and the bridge followed:
    10, `poll_max` at most 5 minutes, at most 200 sources and file roots; its inventory is
    `[]` rather than `null` when empty, and its `version` stays within 40 printable ASCII
    characters.
+8. A job the platform leases again after expiring its lease (section 6.1) is restarted by
+   the bridge under the new lease; before, a bridge still running the old lease ignored
+   the new one and the job failed with `agent_timeout`.
 
 **Open items** (not normative yet):
 

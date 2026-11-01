@@ -48,8 +48,11 @@ type Agent struct {
 	stateDir string
 	agentID  string
 
-	mu       sync.Mutex
-	running  map[string]context.CancelFunc
+	mu      sync.Mutex
+	running map[string]*runningJob
+	// releases holds a job the platform leased again while an older run of it was still
+	// going here; it starts when that run has ended.
+	releases map[string]Job
 	failures int
 	lastOK   time.Time
 	lastErr  string
@@ -117,7 +120,7 @@ var ErrNotEnrolled = errors.New("the agent is not enrolled")
 // New builds an enrolled agent.
 func New(d Deps) (*Agent, error) {
 	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, audit: d.Audit, log: d.Log,
-		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]context.CancelFunc{},
+		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
 		sleep: sleepCtx, minRenew: 5 * time.Second}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }
 	if a.log == nil {

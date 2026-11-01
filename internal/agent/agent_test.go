@@ -418,6 +418,39 @@ func TestLostLeaseAbandonsTheJob(t *testing.T) {
 	}
 }
 
+// TestReleasedJobRestarts: when no renewal reaches the platform for the lease time, it
+// expires the lease and leases the job again, possibly to the same agent while its old run
+// is still going (with more than one parallel job). The agent stops the old run and runs
+// the job again under the new lease; the old run reports nothing.
+func TestReleasedJobRestarts(t *testing.T) {
+	e := newEnv(t, nil)
+	e.enroll()
+	e.db.Delay = 20 * time.Millisecond // the scan takes about a second
+	e.fp.enqueue(Job{JobID: "j", Type: JobScanDatabase, SourceID: "core-banking", LeaseSeconds: 1, Options: JobOptions{MaxTables: 20}})
+	a := e.agent()
+	a.cfg.Agent.MaxParallelJobs = 2
+	a.minRenew = 50 * time.Millisecond
+	released := false
+	if !e.run(a, 15*time.Second, func() bool {
+		a.mu.Lock()
+		_, running := a.running["j"]
+		a.mu.Unlock()
+		if running && !released {
+			released = true
+			e.fp.release("j")
+		}
+		return e.finished("j")()
+	}) {
+		t.Fatal("the job leased again never finished")
+	}
+	j := e.fp.job("j")
+	e.fp.mu.Lock()
+	defer e.fp.mu.Unlock()
+	if j.completed == nil || j.failed != nil || j.job.LeaseToken != "pvbl_j-2" || len(j.parts) != j.completed.Parts {
+		t.Fatalf("completed %v, failed %+v, lease %s", j.completed != nil, j.failed, j.job.LeaseToken)
+	}
+}
+
 // TestRevokedAgentStopsItsJobs: the platform fails the jobs of a revoked agent itself
 // (error_code agent_revoked), so the agent stops a running scan at its next lease renewal
 // instead of finishing work nobody can receive.

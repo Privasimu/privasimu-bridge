@@ -286,10 +286,11 @@ Agent behaviour: polls every `next_poll_seconds` within `poll_min` (default 5 s,
 or 403 waits the longest interval and tells the operator why (revoked, token not
 accepted, organisation not active); rotates its token whenever a poll asks, which includes
 a poll made with the previous token after a lost rotation answer, and keeps retrying to
-store a rotated token it could not save; abandons a job when its lease is withdrawn or the
-agent is refused (409/404/403/401); retries 429/5xx with `Retry-After`; uploads parts of
-at most 200 items and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and
-an extra CA file for an on-premise platform. Its inventory always carries a label (the id
+store a rotated token it could not save; restarts a job the platform leased again after
+its lease expired; abandons a job when its lease is withdrawn or the agent is refused
+(409/404/403/401); retries 429/5xx with `Retry-After`; uploads parts of at most 200 items
+and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and an extra CA file
+for an on-premise platform. Its inventory always carries a label (the id
 when none is configured) and never more than the platforms accept.
 
 ## 7. Data minimisation
@@ -459,7 +460,7 @@ service come only from the platform's tests and are marked as such.
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | ? |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | ? |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | ? |
-| 22 | Tests (contract, security, minimisation) | 125 test functions (137 with subtests, many table-driven), incl. both platform clients and a fake platform with both lines' field rules | ? |
+| 22 | Tests (contract, security, minimisation) | 126 test functions (138 with subtests, many table-driven), incl. both platform clients and a fake platform with both lines' field rules | ? |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | ? |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | ? |
 

@@ -116,6 +116,18 @@ func (f *fakePlatform) enqueue(j Job) {
 	f.jobs[j.JobID] = &fakeJob{job: j, parts: map[int][]byte{}}
 }
 
+// release expires a job's lease and leases the job again under a new lease token, as the
+// platforms do when no renewal reached them for the lease time: attempt 2, parts dropped.
+func (f *fakePlatform) release(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	j := f.jobs[id]
+	j.job.LeaseToken += "-2"
+	j.job.Attempt++
+	j.parts = map[int][]byte{}
+	f.queue = append(f.queue, j.job)
+}
+
 func (f *fakePlatform) job(id string) *fakeJob {
 	f.mu.Lock()
 	defer f.mu.Unlock()
