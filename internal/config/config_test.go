@@ -1,11 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func abs(p string) string {
@@ -237,5 +240,76 @@ func TestLoadResolvesRelativePaths(t *testing.T) {
 	}
 	if _, err := Load(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Fatal("a missing file must be an error")
+	}
+}
+
+func TestLabelsDefaultToTheID(t *testing.T) {
+	c, err := Parse([]byte("sources:\n  - id: crm\n    engine: mysql\n    host: h\n    database: d\n    username: u\n    password: \"env:X\"\nfiles:\n  roots:\n    - id: hr-share\n      path: " + strconv.Quote(abs("share")) + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sources[0].Label != "crm" || c.Files.Roots[0].Label != "hr-share" {
+		t.Fatalf("labels: %q %q", c.Sources[0].Label, c.Files.Roots[0].Label)
+	}
+}
+
+func TestLabelRuleMatchesTheAgentProtocol(t *testing.T) {
+	cases := map[string]bool{
+		strings.Repeat("é", 128): true,  // 128 characters, 256 bytes
+		strings.Repeat("é", 129): false, // 129 characters
+		"Inti \u0085 bank":       true,  // C1 characters are allowed
+		"Inti \u0001 bank":       false, // C0 control
+		"Inti \u007f bank":       false, // DEL
+	}
+	for label, ok := range cases {
+		if got := validText(label, 1, 128); got != ok {
+			t.Errorf("validText(%q) = %v, want %v", label, got, ok)
+		}
+	}
+	if validText("", 1, 128) || !validText("", 0, 512) {
+		t.Fatal("an empty label is refused, an empty description is fine")
+	}
+}
+
+func TestAgentBoundsFollowThePlatform(t *testing.T) {
+	base := func() *Config {
+		c, _ := Parse([]byte("agent:\n  platform_url: \"https://app.privasimu.example\"\n"))
+		return c
+	}
+	if err := base().ValidateAgent(); err != nil {
+		t.Fatalf("defaults (5s, 5m, 1 job) must be valid: %v", err)
+	}
+	// The end-to-end tests of both platform lines run the agent with 1s and 2s.
+	fast := base()
+	fast.Agent.PollMin, fast.Agent.PollMax, fast.Agent.MaxParallelJobs = Duration(time.Second), Duration(2*time.Second), 10
+	if err := fast.ValidateAgent(); err != nil {
+		t.Fatalf("1s, 2s and 10 jobs must be valid: %v", err)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"poll_min below 1s":       func(c *Config) { c.Agent.PollMin = Duration(500 * time.Millisecond) },
+		"poll_max above 5m":       func(c *Config) { c.Agent.PollMax = Duration(10 * time.Minute) },
+		"more than 10 parallel":   func(c *Config) { c.Agent.MaxParallelJobs = 11 },
+		"poll_min above poll_max": func(c *Config) { c.Agent.PollMin, c.Agent.PollMax = Duration(time.Minute), Duration(30*time.Second) },
+	} {
+		c := base()
+		mutate(c)
+		if err := c.ValidateAgent(); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+}
+
+func TestInventorySizeIsBounded(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("sources:\n")
+	for i := 0; i <= MaxInventory; i++ {
+		fmt.Fprintf(&b, "  - {id: s%d, engine: postgresql, host: h, database: d, username: u, password: \"env:X\"}\n", i)
+	}
+	c, err := Parse([]byte(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "201") {
+		t.Fatalf("201 inventory entries must be refused: %v", err)
 	}
 }

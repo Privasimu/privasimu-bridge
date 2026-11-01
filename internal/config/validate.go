@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/privasimu/bridge/internal/i18n"
 )
@@ -64,6 +65,20 @@ func hasControl(s string) bool {
 	return false
 }
 
+// validText is the agent protocol's text rule (labels, descriptions): valid UTF-8, min to
+// max Unicode characters, no C0 control character (U+0000-U+001F) and no DEL (U+007F).
+// C1 characters (U+0080-U+009F) are allowed, as in both platform lines.
+func validText(s string, min, max int) bool {
+	if !utf8.ValidString(s) || hasControl(s) {
+		return false
+	}
+	n := utf8.RuneCountInString(s)
+	return n >= min && n <= max
+}
+
+// MaxInventory is the most sources plus file roots the platform accepts in one inventory.
+const MaxInventory = 200
+
 // Validate checks the parts every command uses: sources, file roots, detection, language.
 func (c *Config) Validate() error {
 	var p problems
@@ -94,6 +109,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	validateSampling(&p, "detection.sampling", &c.Detection.Sampling)
+	if n := len(c.Sources) + len(c.Files.Roots); n > MaxInventory {
+		p.add("config.inventory_size", n, MaxInventory)
+	}
 	return p.err()
 }
 
@@ -103,7 +121,7 @@ func (c *Config) validateSource(p *problems, i int) {
 	if !idPattern.MatchString(s.ID) {
 		p.add("config.id", at+".id")
 	}
-	if hasControl(s.Label) || len(s.Label) > 128 || hasControl(s.Description) || len(s.Description) > 512 {
+	if !validText(s.Label, 1, 128) || !validText(s.Description, 0, 512) {
 		p.add("config.text", at)
 	}
 	if !knownEngine(s.Engine) {
@@ -192,7 +210,7 @@ func (c *Config) validateRoot(p *problems, i int) {
 	if !idPattern.MatchString(r.ID) {
 		p.add("config.id", at+".id")
 	}
-	if hasControl(r.Label) || len(r.Label) > 128 || hasControl(r.Description) || len(r.Description) > 512 {
+	if !validText(r.Label, 1, 128) || !validText(r.Description, 0, 512) {
 		p.add("config.text", at)
 	}
 	if r.Path == "" || !filepath.IsAbs(r.Path) || hasControl(r.Path) {
@@ -305,6 +323,10 @@ func (c *Config) ValidateAgent() error {
 	}
 	checkRef(&p, "agent.token", a.Token)
 	checkRef(&p, "agent.proxy_auth", a.ProxyAuth)
+	// A poll asks for at most 10 jobs (max_jobs 0..10 in the protocol).
+	if a.MaxParallelJobs < 1 || a.MaxParallelJobs > 10 {
+		p.add("config.parallel_jobs")
+	}
 	if a.ProxyURL != "" {
 		if u, err := url.Parse(a.ProxyURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 			p.add("config.proxy_url")
@@ -315,7 +337,10 @@ func (c *Config) ValidateAgent() error {
 			p.add("config.job", j)
 		}
 	}
-	if a.PollMin.D() < time.Second || a.PollMax < a.PollMin {
+	// The platform keeps the previous token 600 seconds after a rotation; with polls at most
+	// 5 minutes apart a lost rotation answer is retried in time. (It also allows 20 polls a
+	// minute; the agent follows next_poll_seconds, 5 or 15, unless poll_max is lower.)
+	if a.PollMin.D() < time.Second || a.PollMax < a.PollMin || a.PollMax.D() > 5*time.Minute {
 		p.add("config.poll")
 	}
 	return p.err()
