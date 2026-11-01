@@ -8,7 +8,8 @@ var catalog = map[string][2]string{
 	"config.language":         {"language must be en or id", "language harus en atau id"},
 	"config.duplicate_id":     {"%s: id %q is already used by %s", "%s: id %q sudah dipakai oleh %s"},
 	"config.id":               {"%s must be 1-63 characters: lower-case letters, digits, '-', '_' or '.'", "%s harus 1-63 karakter: huruf kecil, angka, '-', '_' atau '.'"},
-	"config.text":             {"%s: the label or description is too long or contains control characters", "%s: label atau deskripsi terlalu panjang atau memuat karakter kendali"},
+	"config.text":             {"%s: the label must be 1-128 characters and the description at most 512, without control characters (an empty label becomes the id)", "%s: label harus 1-128 karakter dan deskripsi paling banyak 512, tanpa karakter kendali (label kosong diganti id)"},
+	"config.inventory_size":   {"%d sources and file roots are configured; the platform accepts at most %d in one inventory", "%d sumber dan root berkas terdaftar; platform menerima paling banyak %d dalam satu inventaris"},
 	"config.engine":           {"%s must be one of: %s", "%s harus salah satu dari: %s"},
 	"config.host":             {"%s is not a valid host name or IP address", "%s bukan nama host atau alamat IP yang valid"},
 	"config.port":             {"%s must be between 1 and 65535", "%s harus antara 1 dan 65535"},
@@ -43,7 +44,8 @@ var catalog = map[string][2]string{
 	"config.agent_id":         {"agent.agent_id must be the id given by the platform (letters, digits and -)", "agent.agent_id harus id yang diberikan platform (huruf, angka, dan -)"},
 	"config.proxy_url":        {"agent.proxy_url must be an http:// or https:// address without credentials (use agent.proxy_auth)", "agent.proxy_url harus alamat http:// atau https:// tanpa kredensial (pakai agent.proxy_auth)"},
 	"config.job":              {"agent.allowed_jobs: unknown job type %q", "agent.allowed_jobs: jenis tugas %q tidak dikenal"},
-	"config.poll":             {"agent.poll_min must be at least 1s and not above agent.poll_max", "agent.poll_min minimal 1s dan tidak melebihi agent.poll_max"},
+	"config.poll":             {"agent.poll_min must be at least 1s, agent.poll_max at most 5m, and poll_min not above poll_max (the platform keeps the previous token only 10 minutes after a rotation)", "agent.poll_min minimal 1s, agent.poll_max maksimal 5m, dan poll_min tidak melebihi poll_max (platform hanya menyimpan token lama 10 menit setelah rotasi)"},
+	"config.parallel_jobs":    {"agent.max_parallel_jobs must be between 1 and 10", "agent.max_parallel_jobs harus antara 1 dan 10"},
 
 	// Error responses of mode A (operators see them in the bridge logs and with curl; the
 	// platform shows its own text from the HTTP status).

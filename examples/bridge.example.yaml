@@ -71,7 +71,8 @@ server:
   # sampling: {enabled: false, rows: 100}
 
 # ---------------------------------------------------------------------------------------
-# Mode B: "privasimu-bridge agent". Outbound only; needs the platform side (see DESIGN.md).
+# Mode B: "privasimu-bridge agent". Outbound only; both Privasimu lines (Laravel and Go)
+# implement the platform side (docs/AGENT-PROTOCOL.md).
 # ---------------------------------------------------------------------------------------
 agent:
   platform_url: "https://app.privasimu.example"
@@ -81,17 +82,17 @@ agent:
   proxy_url: ""                     # e.g. http://proxy.example.co.id:8080
   proxy_auth: ""                    # e.g. secret:proxy_auth (value "user:password")
   allowed_jobs: [test_source, scan_database, scan_files]
-  max_parallel_jobs: 1
-  poll_min: 5s
-  poll_max: 5m
+  max_parallel_jobs: 1              # 1 to 10
+  poll_min: 5s                      # at least 1s; the platform suggests 5s or 15s itself
+  poll_max: 5m                      # at most 5m: a lost token rotation is retried in time
 
 # ---------------------------------------------------------------------------------------
-# Databases this bridge may scan.
+# Databases this bridge may scan (at most 200 sources and file roots together).
 # ---------------------------------------------------------------------------------------
 sources:
   - id: core-banking                # lower case, digits, - _ . (used in mode B and logs)
-    label: "Core banking (DC Jakarta)"
-    description: ""
+    label: "Core banking (DC Jakarta)"  # shown in Privasimu, 1-128 characters; default: the id
+    description: ""                 # optional, at most 512 characters
     engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb
     host: 10.10.1.20
     port: 5432                      # default per engine
@@ -163,7 +164,7 @@ files:
   pdf_timeout: 30s                  # PDF text is extracted in a separate process
   roots:
     - id: hr-share
-      label: "HR file share"
+      label: "HR file share"        # default: the id
       path: /srv/shares/hr          # Windows: 'D:\Shares\HR' or "D:/Shares/HR"
       include: []                   # globs; empty = every supported type
       exclude: ["arsip/**", "**/*.tmp"]

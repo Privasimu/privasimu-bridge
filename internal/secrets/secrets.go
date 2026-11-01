@@ -173,8 +173,10 @@ func readLimited(path string, max int64) ([]byte, error) {
 
 // Store is the encrypted secret store: a map of names to values sealed with AES-256-GCM.
 type Store struct {
-	path   string
-	key    []byte
+	path string
+	key  []byte
+	// mu guards values: a running agent stores a rotated token while jobs read secrets.
+	mu     sync.RWMutex
 	values map[string]string
 }
 
@@ -242,6 +244,8 @@ func wipe(b []byte) {
 
 // Get returns a secret.
 func (s *Store) Get(name string) (Value, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	v, ok := s.values[name]
 	return Value(v), ok
 }
@@ -254,12 +258,16 @@ func (s *Store) Set(name, value string) error {
 	if value == "" {
 		return ErrEmptySecret
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.values[name] = value
 	return nil
 }
 
 // Delete removes a secret in memory and reports whether it existed.
 func (s *Store) Delete(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, ok := s.values[name]
 	delete(s.values, name)
 	return ok
@@ -267,6 +275,8 @@ func (s *Store) Delete(name string) bool {
 
 // Names lists the stored secret names, sorted. It never lists values.
 func (s *Store) Names() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]string, 0, len(s.values))
 	for k := range s.values {
 		out = append(out, k)
@@ -277,7 +287,9 @@ func (s *Store) Names() []string {
 
 // Save writes the store atomically with owner-only permissions.
 func (s *Store) Save() error {
+	s.mu.RLock()
 	plain, err := json.Marshal(s.values)
+	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}

@@ -67,15 +67,37 @@ func (p *progressState) request() ProgressRequest {
 	return ProgressRequest{Progress: pct, Stage: stage, Done: done, Total: total}
 }
 
-// start runs a job in the background.
+// runningJob is a job the agent is working on, under one lease.
+type runningJob struct {
+	lease  string
+	cancel context.CancelFunc
+	// superseded means the platform leased the job again: the run stops and reports
+	// nothing, and the job starts again under the new lease.
+	superseded atomic.Bool
+}
+
+// start runs a job in the background. A poll can return a job that is still running here
+// under an older lease: the platform expired that lease (no renewal reached it for the
+// lease time, for example during an outage) and leased the job again, with its parts
+// dropped. The old run then stops, and the job starts again under the new lease once the
+// old run has ended.
 func (a *Agent) start(parent context.Context, job Job) {
+	if job.JobID == "" {
+		return
+	}
 	a.mu.Lock()
-	if _, dup := a.running[job.JobID]; dup || job.JobID == "" {
+	if cur, dup := a.running[job.JobID]; dup {
+		if cur.lease != job.LeaseToken {
+			cur.superseded.Store(true)
+			cur.cancel()
+			a.releases[job.JobID] = job
+		}
 		a.mu.Unlock()
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
-	a.running[job.JobID] = cancel
+	run := &runningJob{lease: job.LeaseToken, cancel: cancel}
+	a.running[job.JobID] = run
 	a.mu.Unlock()
 	a.jobs.Add(1)
 	go func() {
@@ -83,15 +105,20 @@ func (a *Agent) start(parent context.Context, job Job) {
 		defer func() {
 			a.mu.Lock()
 			delete(a.running, job.JobID)
+			next, again := a.releases[job.JobID]
+			delete(a.releases, job.JobID)
 			a.mu.Unlock()
 			cancel()
+			if again && parent.Err() == nil {
+				a.start(parent, next)
+			}
 		}()
-		a.runJob(ctx, job)
+		a.runJob(ctx, job, run)
 	}()
 }
 
 // runJob executes a job, keeps its lease alive and reports the outcome.
-func (a *Agent) runJob(ctx context.Context, job Job) {
+func (a *Agent) runJob(ctx context.Context, job Job, run *runningJob) {
 	started := time.Now()
 	ev := audit.Event{Event: "job", Mode: "agent", AgentID: a.agentID, JobID: job.JobID, JobType: job.Type, SourceID: job.SourceID}
 	prog := &progressState{}
@@ -114,6 +141,13 @@ func (a *Agent) runJob(ctx context.Context, job Job) {
 	cancel()
 	leaseWG.Wait()
 
+	if run.superseded.Load() {
+		ev.Outcome, ev.Code = audit.Error, "lease_replaced"
+		ev.DurationMS = time.Since(started).Milliseconds()
+		a.audit.Log(ev)
+		a.log.Warn("job restarts: the platform leased it again after its lease expired", "job_id", job.JobID)
+		return
+	}
 	if lost.Load() {
 		ev.Outcome, ev.Code = audit.Error, "lease_lost"
 		ev.DurationMS = time.Since(started).Milliseconds()
@@ -178,7 +212,12 @@ func (a *Agent) keepLease(ctx context.Context, job Job, prog *progressState, can
 		resp, err := a.client.Progress(pctx, job, prog.request())
 		pcancel()
 		if err != nil {
-			if code := codeOf(err); code == ErrLeaseExpired || code == ErrJobNotFound || code == ErrForbidden {
+			// The job is over for the platform: its lease is gone, the organisation is
+			// refused, or the agent's token no longer works. Revocation fails the agent's jobs
+			// on the platform (agent_revoked), so finishing the scan would only waste the
+			// source's time.
+			switch codeOf(err) {
+			case ErrLeaseExpired, ErrJobNotFound, ErrForbidden, ErrAgentRevoked, ErrUnauthenticated:
 				lost.Store(true)
 				cancel()
 				return

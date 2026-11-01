@@ -1,8 +1,10 @@
 # Agent protocol 1 (mode B): platform contract
 
-Status: **proposal, normative for implementers**. The agent side is implemented and tested
-in this repository (`internal/agent`, against an in-memory platform that follows this
-document). The platform side does not exist yet in either Privasimu Nexus line.
+Status: **normative, revision 2 (1 November 2026)**. The agent side is implemented and
+tested in this repository (`internal/agent`, against an in-memory platform that follows
+this document, `internal/agent/fakeplatform_test.go`). Both Privasimu Nexus lines implement
+the platform side (branch `feat/bridge-agent-mode-b-2026-10-31` in each backend); revision 2
+records what they settled after the Laravel line ran the real binary end to end (section 13).
 
 This document is the single contract for **both platform lines**: the Laravel backend
 (`backend`, repositories priva-back and api-privasimu-nexus) and the Go backend
@@ -16,7 +18,7 @@ error code, status and exact message). Both backends should load it in their tes
 
 Contents: 1 Model · 2 Wire conventions · 3 Authentication and tokens · 4 Check order ·
 5 Agent API · 6 Jobs, leases and results · 7 Persisting results · 8 Tenant API ·
-9 Data model · 10 Scheduler · 11 Limits · 12 Test plan.
+9 Data model · 10 Scheduler · 11 Limits · 12 Test plan · 13 Revisions and open items.
 
 ## 1. Model
 
@@ -75,7 +77,7 @@ configuration allows.
 | U+2028 and U+2029 escaped as ` `, ` ` | default (without `JSON_UNESCAPED_LINE_TERMINATORS`) | default |
 | Control characters: `\b \f \n \r \t`, others `\u00xx` (lower-case hex) | default | default (Go 1.22+) |
 | Invalid UTF-8 replaced by U+FFFD | `JSON_INVALID_UTF8_SUBSTITUTE` | default |
-| Empty object is `{}` (e.g. `options`) | `new \stdClass` / `(object) []` | struct or empty map |
+| Empty object is `{}`, never `[]` (e.g. `options`, and the count maps of a stored file result: `totals`, `skipped`, `extensions`, a file's `categories`) | `new \stdClass` / `(object) []`; an `array` cast decodes a stored `{}` to `[]`, so restore the maps when encoding | struct or empty map |
 | Empty list is `[]`, never `null` | `[]` | initialise slices |
 | Integers only (no floats in platform responses) | `int` casts | `int` fields |
 | Timestamps: UTC, seconds, literal `Z`: `2026-10-31T12:00:00Z` | `->utc()->format('Y-m-d\TH:i:s\Z')` | `t.UTC().Format("2006-01-02T15:04:05Z")` |
@@ -83,6 +85,12 @@ configuration allows.
 | Every documented key is present; a missing value is `null` | | pointer fields without `omitempty` |
 
 Exception: `options` of a job lists only the options that were set (section 6.2).
+
+Laravel keeps empty count maps as `{}` through `ScanResultsCast` (the `scan_results`
+column) and `AgentResults::jsonMaps`; Go keeps them as decoded. Frontends still read every
+count map with `Object.entries(x ?? {})`, so `{}`, `[]` and `null` all render as empty.
+
+The tenant API of section 8 uses the same flags (`/` and non-ASCII unescaped).
 
 **Errors** always use the envelope
 `{"error":{"code":"<code>","message":"<message>"}}` with the status and the exact English
@@ -112,7 +120,10 @@ Example (exact bytes):
 `{"error":{"code":"lease_expired","message":"The job lease is not valid or has expired."}}`.
 No error carries field details, a stack trace, a tenant name or any submitted value.
 Laravel must render these envelopes for 404/405/413/419/500 under the agent prefix
-instead of the framework's default error pages (route-prefixed exception rendering).
+instead of the framework's default error pages (route-prefixed exception rendering): a
+419 becomes `400 invalid_request` (errors.json has no 419 code), a body above
+`post_max_size` `413 payload_too_large`, anything unexpected `500 server_error`. OPTIONS
+and HEAD under the prefix get `405 method_not_allowed` with `Allow`, never a CORS answer.
 
 ## 3. Authentication and tokens
 
@@ -130,22 +141,39 @@ instead of the framework's default error pages (route-prefixed exception renderi
   line on PostgreSQL with RLS this lookup must run inside
   `CurrentOrgContext::lintasTenant()`; afterwards the middleware sets the organization
   context from the agent row, then applies `tenant.db` (BYODB) and `tenant.readonly`.
-- An agent with status `revoked` gets `401 agent_revoked`; a `pending` agent (not enrolled)
-  or an unknown token gets `401 unauthenticated`.
+- Lookup: a token matches `token_hash`, or `previous_token_hash` while
+  `previous_token_expires_at` is in the future; the status is checked right after the
+  lookup. An agent with status `revoked` gets `401 agent_revoked`; a `pending` agent (not
+  enrolled), an unknown or expired token, or an agent whose organisation row no longer
+  exists gets `401 unauthenticated` (on `/enroll` the last case is `401 enrollment_invalid`).
+- Right after authentication (for `/enroll` right after the token lookup) the
+  organisation must be active: an archived, deleted or frozen organisation gets
+  `403 forbidden` on every route.
+- **Revocation keeps `token_hash` and `previous_token_hash`**, so a revoked agent hears
+  `agent_revoked` (and stops) instead of `unauthenticated`. It clears
+  `enrollment_token_hash`, `enrollment_expires_at` and `rotation_requested`, sets
+  `revoked_at`, and fails the agent's `queued` and `leased` jobs with `error_code`
+  `agent_revoked` and `error_kind` `platform`, clearing their lease hashes (their parts
+  are deleted). Revoking an agent twice changes nothing.
 - Rotation: the new token is valid at once; the previous one stays valid for 600 seconds
-  (`previous_valid_seconds`) so a lost response cannot lock the agent out.
+  (`previous_valid_seconds`). **While a request authenticates with the previous token,
+  `/poll` answers `token_rotation_requested: true`**: the agent lost the answer of its last
+  rotation and rotates again (section 5.8). Without this, an agent whose answer was lost
+  would keep the old token after the flag was cleared and be locked out after 600 s.
 
 ## 4. Check order
 
 Both backends check in this order and answer with the first failure:
 
-1. Route and method: `404 not_found`, `405 method_not_allowed` (with `Allow`).
+1. Route and method: `404 not_found`, `405 method_not_allowed` (with `Allow`; also for
+   OPTIONS and HEAD).
 2. `X-Bridge-Protocol` must be exactly `1`: else `426 protocol_unsupported`.
 3. Body size (`Content-Length` or the bytes read): parts 1 048 576 bytes, every other route
    65 536 bytes: else `413 payload_too_large`.
 4. `Content-Type` must be `application/json` (parameters such as `charset` allowed): else
    `415 unsupported_media_type`.
-5. Authentication (not for `/enroll`): `401 unauthenticated` / `401 agent_revoked`.
+5. Authentication (not for `/enroll`): `401 unauthenticated` / `401 agent_revoked`; then
+   the organisation check of section 3: `403 forbidden`.
 6. Rate limit (section 11): `429 rate_limited` with `Retry-After`.
 7. Tenant in migration (`tenant.readonly`: freezing or migrating): `503 maintenance` with
    `Retry-After: 60`. For `/enroll` this check runs after step 9's token lookup.
@@ -155,9 +183,16 @@ Both backends check in this order and answer with the first failure:
 
 ## 5. Agent API
 
-Field rules use these definitions: *label* = 1 to 128 characters, valid UTF-8, no control
-characters; *id* = `^[a-z0-9][a-z0-9_.-]{0,62}$`; *digest* = `^sha256:[0-9a-f]{64}$`;
-*uuid* = lower-case UUID; *word* = `^[a-z0-9_]{1,40}$`.
+Field rules use these definitions:
+
+- *label* = 1 to 128 characters and *text* = 0 to 512 characters. Both count Unicode
+  characters (code points, not bytes), must be valid UTF-8 and may not contain a C0
+  control character (U+0000 to U+001F) or DEL (U+007F). **C1 characters (U+0080 to U+009F)
+  are allowed.** This is exactly the bridge's own configuration check; Laravel
+  (`AgentProtocol::text`) and Go (`isText`) apply the same rule.
+- *id* = `^[a-z0-9][a-z0-9_.-]{0,62}$`; *digest* = `^sha256:[0-9a-f]{64}$`; *uuid* =
+  lower-case UUID; *word* = `^[a-z0-9_]{1,40}$`.
+- A list is a JSON array, `[]` when empty; `null` in place of a list is `400`.
 
 ### 5.1 `POST /enroll`
 
@@ -169,8 +204,10 @@ Request:
 ```
 Rules: `enrollment_token` matches `^pvbe_[A-Za-z0-9_-]{43}$` (else `401
 enrollment_invalid`, not 400, so the format reveals nothing); `agent.protocol` must be 1
-(else `426 protocol_unsupported`); `version` 1 to 40 printable ASCII; `os`, `arch` *word*;
-`capabilities` at most 64 strings of 1 to 64 characters `^[a-z0-9_:,.-]+$`.
+(else `426 protocol_unsupported`); `version` 1 to 40 printable ASCII; `os`, `arch` *word*
+(stored cut to 20 characters); `capabilities` a list of at most 64 strings of 1 to 64
+characters `^[a-z0-9_:,.-]+$`. The bridge keeps its `version` within this rule even when a
+build sets another one.
 
 Effect: the agent (status `pending`, token not expired) becomes `active`; the enrollment
 hash is cleared; `enrolled_at`, `version`, `protocol`, `os`, `arch`, `capabilities` and
@@ -195,9 +232,9 @@ Rules: as enroll for the agent fields; `sources_digest` is `""` or a *digest*;
 `running_jobs` at most 50 *uuid*; `max_jobs` 0 to 10.
 
 Effect: update `last_seen_at` (at most one write per 30 seconds is enough), `version`,
-`protocol`, `os`, `arch`, `capabilities`, `last_ip`. Then lease up to
-`min(max_jobs, 4)` jobs of this agent in state `queued`, oldest `queued_at` first
-(ties by `id`), each as in section 6.1.
+`protocol`, `os`, `arch`, `capabilities`, `last_ip`. Then expire this agent's leases
+(section 6.1) and lease up to `min(max_jobs, 4)` jobs of this agent in state `queued`,
+oldest `queued_at` first (ties by `id`), each as in section 6.1.
 
 Response `200` (key order as shown):
 ```json
@@ -206,7 +243,13 @@ Response `200` (key order as shown):
 - `jobs`: `[]` when none.
 - `next_poll_seconds`: 5 when this agent still has `queued` jobs after leasing, else 15.
 - `inventory_requested`: true when the stored digest is null or differs from the request.
-- `token_rotation_requested`: true when an admin asked to rotate (section 8).
+- `token_rotation_requested`: true when an admin asked to rotate (section 8) **or** when
+  this request was authenticated with the previous token (the answer of the agent's last
+  rotation was lost, section 3). The agent rotates whenever it is true.
+
+The agent asks for `max_jobs` of at most 10 and waits `next_poll_seconds` between polls,
+within its configured `poll_min` (at least 1 s) and `poll_max` (at most 5 minutes, so a
+lost rotation answer is retried inside the 600 seconds).
 
 ### 5.3 `PUT /sources`
 
@@ -216,16 +259,23 @@ Request:
 ```json
 {"sources_digest":"sha256:5f…","sources":[{"id":"core-banking","kind":"database","engine":"postgresql","label":"Core banking","description":"DC Jakarta","capabilities":["sampling"]},{"id":"hr-share","kind":"files","engine":"filesystem","label":"HR share","capabilities":["path_mode:hashed","content_scan"]}]}
 ```
-Rules: `sources_digest` *digest*; at most 200 sources with unique *id*; `kind` `database`
-(engine `postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`) or `files` (engine
-`filesystem`); `label` *label*; `description` optional, at most 512 characters;
-`capabilities` at most 16 strings `^[a-z0-9_:,.-]{1,64}$`.
+Rules: `sources_digest` *digest*; `sources` a list (`[]` when the agent offers nothing,
+never `null`) of at most 200 objects with unique *id*; `kind` `database` (engine
+`postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`) or `files` (engine `filesystem`);
+`label` *label* (required: one invalid entry refuses the whole inventory); `description`
+absent, `null` or *text* (an empty string is stored as `null`); `capabilities` a list of
+at most 16 strings `^[a-z0-9_:,.-]{1,64}$`.
+
+The bridge sends the id as the label when its configuration has none, and its
+configuration check refuses more than 200 sources and file roots together, so an
+inventory it sends is always accepted.
 
 The digest is computed by the agent (SHA-256 of its JSON inventory); the platform stores
 it and never recomputes it.
 
 Effect: upsert by (`agent_id`, `id`); delete the ids not listed (systems linked to a
-deleted id show "source not on agent" and cannot be scanned); store the digest.
+deleted id show "source not on agent" and cannot be scanned); store the digest. The
+inventory id becomes the tenant `Source.id` (section 8).
 
 Response `200`: `{"accepted":2}`.
 
@@ -291,9 +341,19 @@ Response `200`: `{"status":"failed"}` (also when re-queued, and again for a repe
 ### 5.8 `POST /token/rotate`
 
 Request: `{}`. Response `200`:
-`{"agent_token":"pvba_…","previous_valid_seconds":600}`. Effect: previous hash = current,
+`{"agent_token":"pvba_…","previous_valid_seconds":600}`. Effect: previous hash = current
+hash (also when this request was authenticated with the previous token),
 `previous_token_expires_at = now + 600 s`, current = new hash, rotation flag cleared.
 Audit: `bridge_agent.token_rotated`.
+
+A lost answer: the platform has rotated, the agent still holds the token that is now the
+previous one. Its next poll is answered with `token_rotation_requested: true` (section 3)
+and it rotates again with that token. The agent uses a new token at once and, if it cannot
+store it, stores it again after every poll.
+
+Known limit (open item, section 13): when the second answer is lost too, the second
+rotation makes the never-delivered token the previous one, so the token the agent holds
+stops working at once and the agent must be enrolled again.
 
 ### 5.9 Job route checks
 
@@ -309,7 +369,11 @@ job of another agent or tenant: `404 job_not_found` (existence is never revealed
 When a job is leased: `status = leased`, `attempt = attempt + 1`, a new lease token,
 `lease_seconds = 120`, `lease_expires_at = now + 120 s`, `leased_at = now`. A lease that
 expires (no progress, part or result for 120 s) makes the job `queued` again when
-`attempt < 2`, otherwise `failed` with `error_code = agent_timeout`.
+`attempt < 2` (progress and stage reset, parts deleted), otherwise `failed` with
+`error_code = agent_timeout`. The job may then be leased to the same agent while its old
+run is still going (after an outage longer than the lease): the bridge recognises the job
+id with a new lease token, stops the old run without reporting, and runs the job again
+under the new lease.
 
 States: `queued → leased → completed | failed`; `leased → queued` (expired or retryable
 fail); `queued | leased → canceled` (admin); `failed` with `agent_revoked` when the agent
@@ -351,7 +415,8 @@ Each item of a `tables` part:
 {"name":"users","schema":"public","row_estimate":1200,"omitted_columns":0,"sampled":true,"columns":[{"name":"kontak","data_type":"character varying(255)","nullable":true,"pii":true,"category":"phone","pdp_category":"umum","confidence":1,"detection":"content","shadow":true,"protection_state":"plaintext","content":{"sampled":20,"matching":20,"matches":{"phone":20}}}]}
 ```
 - `name` is the table as reported (`schema.table` outside the default schema); every
-  name is 1 to 255 bytes of valid UTF-8 without control characters.
+  name is 1 to 255 bytes of valid UTF-8 without a C0 control character or DEL (the
+  *label* rule's characters).
 - `row_estimate` may be null; `sampling_error` (a dbsource kind) appears when sampling
   failed and the columns were classified by name only.
 - Column: `category` and `pdp_category` are absent when `pii` is false; `detection` is
@@ -406,7 +471,8 @@ No file content ever appears.
 | `agent_revoked` (platform) | Agen bridge sudah dicabut. |
 | any other code | Pemindaian lewat bridge gagal. |
 
-`error_kind` is stored next to the text as the platform's `error_kind`.
+`error_kind` is stored next to the text as the platform's `error_kind`; failures the
+platform makes itself (`agent_timeout`, `agent_revoked`) have `error_kind` `platform`.
 
 ## 7. Persisting results
 
@@ -467,56 +533,139 @@ induk siswa / Student number · `vehicle_plate` Nomor polisi kendaraan / Vehicle
 
 **`scan_files`**: a file share is a new source type (section 8). Store
 `scan_results = {"engine":"bridge_files","summary":<result>,"files":<items, at most 5000,
-most findings first, ties by id>,"files_stored":<n>,"scanned_at":<now>}`,
+most findings first, ties by id>,"files_stored":<n>,"scanned_at":<now>}` (empty count
+maps stay `{}` when stored and when returned, section 2),
 `pii_alert_count` = `files_with_pii`, `pdp_alert_count` = the number of files whose
 `pdp_category` is `spesifik`, `scanning_status = done`, `last_scanned_at = now`.
 
 ## 8. Tenant API (both frontends)
 
 In the main authenticated group (`auth:sanctum`, `tenant.context`, `tenant.db`,
-`tenant.readonly`), under `/api/data-discovery`. Read routes use
-`permission:data_discovery,read`; the others `permission:data_discovery,write`. Whether
-only tenant admins may manage agents is an owner decision (it changes who can connect an
-internal network); this document assumes `data_discovery,write`.
+`tenant.readonly`), under `/api/data-discovery`. Answers use the canonical flags of
+section 2. An agent token never authenticates a tenant route, and a Sanctum token never
+authenticates an agent route.
 
-| Route | Response |
-|---|---|
-| `GET /bridge-agents` | `200 {"data":[Agent…]}` |
-| `POST /bridge-agents` `{"name"}` | `201 {"data":{"agent":Agent,"enrollment_token":"pvbe_…","enrollment_expires_at":"…"}}` |
-| `POST /bridge-agents/{id}/enrollment-token` | `200` same shape; only while `pending`, else `409` |
-| `PATCH /bridge-agents/{id}` `{"name"}` | `200 {"data":Agent}` |
-| `POST /bridge-agents/{id}/rotate-token` | `200 {"data":Agent}` (the agent rotates on its next poll) |
-| `POST /bridge-agents/{id}/revoke` | `200 {"data":Agent}`; leased jobs fail with `agent_revoked` |
-| `DELETE /bridge-agents/{id}` | `200 {"data":{"deleted":true}}` (revokes first; soft delete) |
-| `GET /bridge-agents/{id}/sources` | `200 {"data":[Source…]}` |
-| `GET /bridge-jobs/{id}` | `200 {"data":Job}` |
-| `POST /bridge-jobs/{id}/cancel` | `200 {"data":Job}` |
+**Who may manage an agent** (owner decision of 31 October 2026). Creating an agent,
+renewing its enrollment token, renaming it, requesting a token rotation, revoking and
+deleting it connect or disconnect an internal network. These routes need
+`permission:data_discovery,write` **and** the `bridge.manager` gate, which allows:
+
+- root and superadmin (their usual bypass);
+- a **tenant admin**: `users.role = admin` inside an organisation (Laravel
+  `RequireTenantAdmin::isTenantAdmin`, Go `IsTenantAdminRole`). A tenant role that is only
+  named `admin`, or that holds `*`, exempts its users from division rules but does not
+  make them tenant admins here;
+- a **DPO**: `users.role = dpo`, or a tenant role named `dpo` (`AssignmentScope::berperanDpo`);
+- a user whose Data Discovery access is **explicitly `ubah`** in Menu Preferences (division
+  module access): a per-person exception decides alone; without one, the row of the
+  user's own division (`AksesDivisiModulService::explicitLevel`). The implicit default (no
+  row), an inherited level, `baca` and `tidak` never count; a person exception `tidak`
+  overrides a division `ubah`.
+
+Everyone else gets
+`403 {"message":"Hanya admin tenant, DPO, atau pengguna yang ditugaskan mengubah Data Discovery yang dapat mengelola agen bridge.","code":"BRIDGE_MANAGER_ONLY"}`
+(the same Indonesian text in both lines). With `data_discovery,read` a user lists agents,
+their sources and jobs; with `data_discovery,write` a user links an information system to
+an existing agent source, runs its test or scan, and cancels jobs.
+
+| Route | Needs | Response |
+|---|---|---|
+| `GET /bridge-agents` | read | `200 {"data":[Agent…],"meta":{"can_manage":true}}` |
+| `POST /bridge-agents` `{"name"}` | manage | `201 {"data":{"agent":Agent,"enrollment_token":"pvbe_…","enrollment_expires_at":"…"}}` |
+| `POST /bridge-agents/{id}/enrollment-token` | manage | `200` same shape; only while `pending`, else `409 BRIDGE_AGENT_NOT_PENDING` |
+| `PATCH /bridge-agents/{id}` `{"name"}` | manage | `200 {"data":Agent}` |
+| `POST /bridge-agents/{id}/rotate-token` | manage | `200 {"data":Agent}` (the agent rotates on its next poll); only while `active`, else `409 BRIDGE_AGENT_NOT_ACTIVE` |
+| `POST /bridge-agents/{id}/revoke` | manage | `200 {"data":Agent}`; queued and leased jobs fail with `agent_revoked` (section 3) |
+| `DELETE /bridge-agents/{id}` | manage | `200 {"data":{"deleted":true}}` (revokes first; soft delete) |
+| `GET /bridge-agents/{id}/sources` | read | `200 {"data":[Source…]}`, ordered by `id` |
+| `GET /bridge-jobs?information_system_id={uuid}[&active=1]` | read | `200 {"data":[Job…]}` (below) |
+| `GET /bridge-jobs/{id}` | read | `200 {"data":Job}` |
+| `POST /bridge-jobs/{id}/cancel` | write | `200 {"data":Job}`; a job that is no longer `queued` or `leased`: `409 BRIDGE_JOB_FINISHED` |
+
+"manage" = `data_discovery,write` and the `bridge.manager` gate. `meta.can_manage` (after
+`data`) is true exactly when the caller would pass both, so the frontend can hide the
+management actions. Agents are listed oldest first (`created_at`, then `id`).
 
 `Agent` = `{"id","name","status","online","last_seen_at","version","os","arch","protocol","capabilities","sources_count","enrolled_at","revoked_at","created_at","updated_at"}`
-(`online` = `last_seen_at` within the last 120 seconds). `Source` =
-`{"id","kind","engine","label","description","capabilities","reported_at"}`. `Job` =
-`{"id","type","status","source_id","information_system_id","attempt","progress","stage","error_kind","error_code","error","created_at","leased_at","finished_at"}`.
+(`online` = `last_seen_at` within the last 120 seconds; `capabilities` is `[]` when
+unknown).
+
+`Source` = `{"id","kind","engine","label","description","capabilities","reported_at"}`.
+**`id` is the agent's inventory id** (`bridge_agent_sources.source_key`), the exact value a
+system stores in `connection_config.bridge_source_key`; it is never the row UUID, and there
+is no separate `source_key` key. `description` is `null` when absent or empty.
+
+`Job` = `{"id","type","status","source_id","information_system_id","attempt","progress","stage","error_kind","error_code","error","created_at","leased_at","finished_at"}`
+(`error` = the text of section 6.6 for `error_code`, else `null`). Reading or cancelling a
+job needs its information system to be visible to the caller; otherwise `404`.
+
+**Finding a job after a reload**: `GET /bridge-jobs?information_system_id={uuid}[&active=1]`
+lets the frontend show the progress card (and cancel) when it opens an agent-linked system.
+
+- The id is lower-cased. It must be the UUID of an information system the caller can see
+  (organisation boundary and record visibility; soft-deleted systems excluded). A missing,
+  malformed, unknown, invisible or foreign id answers `200 {"data":[]}`, never 404 or 422,
+  so other tenants' ids are never revealed. With a repeated key the last value wins.
+- `active` with a true value (`1`, `true`, `on`, `yes`, any case) keeps only `queued` and
+  `leased` jobs (protocol 1 has no `running` state); any other value, or none, lists every
+  status.
+- Newest first (`created_at` desc, then `id` desc), at most 5, in the Job shape of
+  `GET /bridge-jobs/{id}`.
+
+**Other answers** (the same bytes in both lines):
+
+| Case | Status | Body |
+|---|---|---|
+| unknown, malformed or invisible agent or job id | 404 | `{"message":"Not found"}` |
+| name missing or blank (it is trimmed) | 422 | `{"message":"Nama agen wajib diisi.","errors":{"name":["Nama agen wajib diisi."]}}` |
+| name over 120 characters | 422 | `{"message":"Nama agen maksimal 120 karakter.","errors":{"name":["Nama agen maksimal 120 karakter."]}}` |
+| root or superadmin without an organisation creates an agent | 422 | `{"message":"Organization ID is required"}` |
+| enrollment token for an agent that is not `pending` | 409 | `{"message":"Token pendaftaran hanya dapat dibuat untuk agen yang belum terdaftar.","code":"BRIDGE_AGENT_NOT_PENDING"}` |
+| rotation for an agent that is not `active` | 409 | `{"message":"Rotasi token hanya dapat diminta untuk agen yang aktif.","code":"BRIDGE_AGENT_NOT_ACTIVE"}` |
+| cancel of a finished job | 409 | `{"message":"Tugas ini sudah selesai dan tidak dapat dibatalkan.","code":"BRIDGE_JOB_FINISHED"}` |
 
 Information systems linked to an agent keep their `source_type` and add two
 `connection_config` keys: `bridge_agent_id` (uuid) and `bridge_source_key` (an inventory
-id). They have no host, credential or path. For them:
+id). They have no host, credential or path. A system is linked when `bridge_agent_id` is a
+non-empty string, or when its type is `file_share`. For them:
 
 - `POST /data-discovery/{id}/test-connection` and `POST /data-discovery/{id}/scan` answer
   `202 {"data":{"job_id":"…","status":"queued"}}`; the frontend polls
-  `GET /bridge-jobs/{id}` (test) or the system's `scanning_status` (scan).
+  `GET /bridge-jobs/{id}` (test) or the system's `scanning_status` (scan). A test while a
+  test job is active answers `202` with that job. A scan while a scan job is active
+  answers `409 {"message":"Pemindaian sistem ini masih berjalan.","data":{"job_id":"…","status":"queued"}}`.
+- The link is checked on create and update (`422
+  {"message","code","errors":{"connection_config.bridge_agent_id":[message]}}`, a pending
+  agent allowed) and on test and scan (`422 {"message","code"}`), in this order:
+
+| Code | Message | When |
+|---|---|---|
+| `BRIDGE_AGENT_REQUIRED` | Sumber file share hanya dapat dipindai lewat agen bridge. Pilih agen dan root berkasnya. | a `file_share` system without an agent link |
+| `BRIDGE_AGENT_NOT_FOUND` | Agen bridge tidak ditemukan. | no such agent in the organisation |
+| `BRIDGE_AGENT_REVOKED` | Agen bridge sudah dicabut. | the agent is revoked |
+| `BRIDGE_AGENT_PENDING` | Agen bridge belum terdaftar. | test and scan only: the agent has not enrolled |
+| `BRIDGE_SOURCE_NOT_ON_AGENT` | Sumber ini tidak ada di inventaris agen bridge. | `bridge_source_key` is not in the agent's inventory |
+| `BRIDGE_SOURCE_MISMATCH` | Jenis sumber di agen bridge tidak cocok dengan jenis sistem. | the entry's kind or engine does not fit the system type, or the type cannot use an agent (checked after the inventory lookup) |
+
 - New `source_type` **`file_share`** (category `unstructured`): valid only with
   `bridge_agent_id` + `bridge_source_key` of a `files` source. It is not the retired
   `file` type and has no path field.
 - `mongodb` becomes scannable through an agent (no platform-side driver).
+- A manual `scan_files` job gets `options` `{"refresh":true}`; every other job `{}`.
 
 ## 9. Data model (both lines, identical names)
 
-All tables have `org_id` (RLS policy like every tenant table) and soft deletes where
-listed.
+All tables have `org_id` and soft deletes where listed. `bridge_agents` is a landlord
+table: it stays in the platform database for isolated (BYODB) tenants, because the token
+lookup runs before the tenant is known. Row-level security of the four tables follows each
+line's rules for tenant and landlord tables, with tenant-isolation tests in both lines.
+`status`, `kind` and `type` are varchar(20); `options`, a source's `capabilities` and
+`reported_at` are not null.
 
 - `bridge_agents`: `id` uuid pk, `org_id`, `name` varchar(120), `status` (`pending`,
   `active`, `revoked`), `enrollment_token_hash` char(64) null, `enrollment_expires_at`
-  null, `token_hash` char(64) null, `previous_token_hash` char(64) null,
+  null, `token_hash` char(64) null, `previous_token_hash` char(64) null (both kept on
+  revocation, section 3),
   `previous_token_expires_at` null, `rotation_requested` bool, `version` varchar(40) null,
   `protocol` smallint null, `os` varchar(20) null, `arch` varchar(20) null,
   `capabilities` json null, `sources_digest` varchar(71) null, `last_seen_at` null,
@@ -538,9 +687,10 @@ listed.
 
 ## 10. Scheduler
 
-- Every minute: expire leases (section 6.1).
-- Daily: delete `bridge_job_parts` older than 7 days and `pending` agents whose
-  enrollment expired more than 30 days ago (soft delete).
+- Every minute: expire leases (section 6.1), `bridge-agents:expire-leases`.
+- Daily at 03:50 (WIB, like every schedule): delete `bridge_job_parts` older than 7 days
+  and `pending` agents whose enrollment expired more than 30 days ago (soft delete),
+  `bridge-agents:prune`.
 - `privasimu:scan-scheduled-systems` (Laravel) and its Go twin: a system linked to an
   agent gets a `scan_database` or `scan_files` job instead of a direct scan; no new job
   while one is `queued` or `leased` for the same system.
@@ -555,11 +705,13 @@ listed.
 | request body | 64 KiB; parts 1 MiB |
 | parts per job | 500 |
 | items per part | 1000 |
+| `max_jobs` in a poll | 0 to 10 (the bridge asks for at most 10) |
 | leased jobs per poll | 4 |
-| sources per agent | 200 |
+| sources per agent | 200 (the bridge's configuration check: sources and file roots together) |
 | lease | 120 s; 2 attempts |
 | enrollment token | 24 h, single use |
 | previous agent token after rotation | 600 s |
+| bridge poll interval | `next_poll_seconds` within `poll_min` (≥ 1 s) and `poll_max` (≤ 5 min) |
 | stored file findings per scan | 5000 |
 
 ## 12. Test plan for the platform implementations
@@ -570,6 +722,63 @@ code), the exact error bytes, the key order of every response (compare against t
 examples above with fixed tokens, ids and clock), idempotent parts/complete/fail, lease
 expiry and re-queueing, cross-tenant isolation of token lookup and job ids (a job of
 another tenant is `404 job_not_found`), and `tenant.readonly` returning
-`503 maintenance`. The agent in this repository runs the same flows against an in-memory
-platform (`internal/agent/fakeplatform_test.go`) that follows this document; it is a
-reference for the expected behaviour.
+`503 maintenance`. Since revision 2 also:
+
+- the text rule: 128 characters accepted and 129 refused counting characters, not bytes; a
+  C1 character accepted; U+0000 to U+001F and U+007F refused; an inventory entry without a
+  label, or `"sources": null`, refused with 400;
+- a lost rotation: a poll authenticated with the previous token answers
+  `token_rotation_requested: true`, and a rotation authenticated with it succeeds;
+- revocation: both the current and the previous token get `401 agent_revoked`, active jobs
+  fail with `agent_revoked` (`error_kind` `platform`), and a frozen or archived organisation
+  gets `403 forbidden`;
+- the manager gate: allowed for a tenant admin, a DPO, an explicit `ubah` for the division
+  and an explicit `ubah` as a person exception; refused (`BRIDGE_MANAGER_ONLY`) for the
+  implicit default, `baca`, a person exception `tidak` over a division `ubah`, and a
+  caller without `data_discovery,write`; `meta.can_manage` agrees with the gate;
+- `Source.id` equals the inventory id; the jobs lookup answers `{"data":[]}` for a foreign
+  or malformed id, filters `active`, and returns at most 5 newest first;
+- empty count maps come back as `{}`.
+
+The agent in this repository runs the same flows against an in-memory platform
+(`internal/agent/fakeplatform_test.go`) that follows this document, including the field
+rules of section 5 (every agent test fails when the agent sends a request the platforms
+would refuse) and a rotation whose answer is dropped; it is a reference for the expected
+behaviour.
+
+## 13. Revisions and open items
+
+**Revision 2, 1 November 2026.** The Laravel line ran the real bridge binary end to end
+(enroll, inventory, heartbeat, a file-root test, a manual file scan, an admin rotation,
+revocation); both lines then settled these points, and the bridge followed:
+
+1. *Label required*: an inventory entry needs a label of 1 to 128 characters, and one
+   invalid entry refuses the whole inventory. The bridge now uses the id as the label when
+   its configuration has none.
+2. *Lost rotation answer*: `/poll` answers `token_rotation_requested: true` while the agent
+   authenticates with its previous token, so an agent that lost a rotation answer rotates
+   again instead of being locked out after 600 seconds (section 3, 5.2, 5.8).
+3. *Text rule*: "no control characters" meant C0 and DEL only; C1 characters are allowed,
+   as the bridge checks (section 5).
+4. *Revocation* keeps the token hashes so the agent hears `agent_revoked`; the bridge now
+   also stops running jobs on `agent_revoked` or `unauthenticated` (section 3).
+5. *Tenant API*: the manager gate and `BRIDGE_MANAGER_ONLY`, `meta.can_manage`,
+   `Source.id` = inventory id, the jobs lookup, the other answers and the link refusals
+   (section 8).
+6. *Empty maps* are `{}` in both lines (section 2).
+7. The bridge's configuration check now matches the platforms: `max_parallel_jobs` 1 to
+   10, `poll_max` at most 5 minutes, at most 200 sources and file roots; its inventory is
+   `[]` rather than `null` when empty, and its `version` stays within 40 printable ASCII
+   characters.
+8. A job the platform leases again after expiring its lease (section 6.1) is restarted by
+   the bridge under the new lease; before, a bridge still running the old lease ignored
+   the new one and the job failed with `agent_timeout`.
+
+**Open items** (not normative yet):
+
+- *Two lost rotation answers in a row* lock the agent out (section 5.8): the second
+  rotation, authenticated with the previous token, overwrites `previous_token_hash` with
+  the token the agent never received. Suggested for both lines: when `/token/rotate` is
+  authenticated with the previous token, keep `previous_token_hash` and
+  `previous_token_expires_at` and replace only `token_hash`. The old token still expires
+  600 seconds after the first rotation, so nothing is valid for longer than today.

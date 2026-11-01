@@ -8,8 +8,8 @@ counts and confidence**. Values, samples and file content never leave.
 
 - **Mode A** (works today): Privasimu calls the bridge over HTTPS with the existing
   bridge contract (contract v1). No change to Privasimu is needed.
-- **Mode B** (agent ready, platform side proposed): the bridge polls Privasimu for jobs
-  and posts results, so the client opens **no inbound port**.
+- **Mode B** (agent and both platform lines): the bridge polls Privasimu for jobs and
+  posts results, so the client opens **no inbound port**.
 
 Databases: PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, Oracle, MongoDB (pure-Go
 drivers; no Oracle Instant Client or ODBC). Files: TXT, CSV, JSON and other text, DOCX,
@@ -28,8 +28,9 @@ Privasimu Nexus has two backend lines that stay in sync: the **Laravel line**
   (`X-API-Key`, `X-Contract-Version: 1`) and the same field mapping (`BridgeSourceTypes`).
   The test suite replays both clients, including the bytes where they differ (JSON
   encoding, compression, concurrency); see [docs/DESIGN.md](docs/DESIGN.md) section 2.2.
-- Mode B is specified once, in [docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md), so the
-  Laravel and Go platforms can implement it byte-identically.
+- Mode B is specified once, in [docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md), and both
+  platforms implement it byte-identically; the Laravel line verified it end to end with
+  this binary.
 
 **Why a Go binary and not PHP**: the bridge runs on the client's server. As one static
 file it needs no PHP, Composer, web server, PHP-FPM or database extensions (`oci8` with
@@ -101,5 +102,6 @@ The command line speaks English and Indonesian (`--lang id` or
 ## Status
 
 0.1.0-dev. Mode A is complete and tested against both platform clients. Mode B and file
-scanning in Privasimu need the platform work listed in [docs/DESIGN.md](docs/DESIGN.md)
-section 12. Database integration tests have not been run against live databases yet.
+scanning are implemented in both platform lines (agent protocol revision 2; see
+[docs/DESIGN.md](docs/DESIGN.md) section 12 for the frontend work). Database integration
+tests have not been run against live databases yet.

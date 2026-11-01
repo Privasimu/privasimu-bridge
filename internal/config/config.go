@@ -381,6 +381,11 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Sources {
 		src := &c.Sources[i]
+		// The platform requires a label of 1 to 128 characters for every inventory entry;
+		// without one, the id is the label.
+		if strings.TrimSpace(src.Label) == "" {
+			src.Label = src.ID
+		}
 		src.Engine = strings.ToLower(strings.TrimSpace(src.Engine))
 		if src.Engine == "mariadb" {
 			src.Engine = "mysql"
@@ -410,6 +415,9 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range f.Roots {
 		r := &f.Roots[i]
+		if strings.TrimSpace(r.Label) == "" {
+			r.Label = r.ID
+		}
 		if r.MaxFiles <= 0 {
 			r.MaxFiles = 500000
 		}
