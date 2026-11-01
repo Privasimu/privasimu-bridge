@@ -1,11 +1,12 @@
 # Privasimu Bridge: design
 
-Status: 0.1.0-dev, 31 October 2026. This repository is a new, standalone bridge for
+Status: 0.1.0-dev, 1 November 2026. This repository is a new, standalone bridge for
 Privasimu Data Discovery. It was written without access to the Privasimu team's existing
 bridge service ("api-data-discovery"); section 13 is a checklist for comparing the two.
 
-What is implemented and tested is stated as such. What is proposed (mode B on the
-platform side, file scanning in the platform) is marked **proposal**.
+What is implemented and tested is stated as such. Mode B and file-share scanning are
+implemented on the platform side too, in both Privasimu Nexus lines (branch
+`feat/bridge-agent-mode-b-2026-10-31` in each backend), to agent protocol revision 2.
 
 Contents: 1 Purpose · 2 Works with both Privasimu Nexus lines · 3 Architecture ·
 4 Threat model · 5 Mode A · 6 Mode B · 7 Data minimisation · 8 Local credentials ·
@@ -30,8 +31,8 @@ out only names, types, categories, counts and confidence. It has two modes:
 
 - **Mode A** (implemented, works today): the platform calls the bridge over HTTPS with the
   existing **contract v1**. No platform change is needed.
-- **Mode B** (agent implemented and tested; platform side is a **proposal**): the bridge
-  polls the platform and posts results. No inbound port at all.
+- **Mode B** (implemented in the agent and in both platform lines): the bridge polls the
+  platform and posts results. No inbound port at all.
 
 ## 2. Works with both Privasimu Nexus lines (Laravel and Go)
 
@@ -258,9 +259,10 @@ lines):
 
 ## 6. Mode B: outbound agent
 
-Agent: implemented and tested (`internal/agent`) against an in-memory platform. Platform:
-**proposal**, specified normatively in [AGENT-PROTOCOL.md](AGENT-PROTOCOL.md) for both
-lines. Summary:
+Agent: implemented and tested (`internal/agent`) against an in-memory platform that
+applies the platforms' field rules. Platform: implemented in both lines to
+[AGENT-PROTOCOL.md](AGENT-PROTOCOL.md) revision 2, which the Laravel line verified end to
+end with the real binary. Summary:
 
 | Route (`/api/bridge-agent/v1`) | Purpose |
 |---|---|
@@ -279,11 +281,17 @@ request. Errors: `{"error":{"code","message"}}` with 17 fixed codes. Job types:
 `test_source`, `scan_database`, `scan_files`; the platform can lower limits, narrow to an
 allowed schema and switch sampling off, never on.
 
-Agent behaviour: polls between `poll_min` (5 s) and `poll_max` (5 min) with jitter;
-backs off on errors; on 401 waits the longest interval and tells the operator to enroll
-again; abandons a job when its lease is withdrawn (409/404/403); retries 429/5xx with
-`Retry-After`; uploads parts of at most 200 items and 512 KiB; supports an HTTP(S) proxy
-with credentials from a secret and an extra CA file for an on-premise platform.
+Agent behaviour: polls every `next_poll_seconds` within `poll_min` (default 5 s, at least
+1 s) and `poll_max` (default and maximum 5 min) with jitter; backs off on errors; on 401
+or 403 waits the longest interval and tells the operator why (revoked, token not
+accepted, organisation not active); rotates its token whenever a poll asks, which includes
+a poll made with the previous token after a lost rotation answer, and keeps retrying to
+store a rotated token it could not save; restarts a job the platform leased again after
+its lease expired; abandons a job when its lease is withdrawn or the agent is refused
+(409/404/403/401); retries 429/5xx with `Retry-After`; uploads parts of at most 200 items
+and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and an extra CA file
+for an on-premise platform. Its inventory always carries a label (the id
+when none is configured) and never more than the platforms accept.
 
 ## 7. Data minimisation
 
@@ -376,6 +384,10 @@ A literal password in the file is a validation error that never echoes the value
 
 Mode A needs **no platform change**. Optional improvements are marked (opt).
 
+Status on 1 November 2026: backend items 1 to 6 are implemented in both lines (branch
+`feat/bridge-agent-mode-b-2026-10-31`), following AGENT-PROTOCOL.md revision 2; the
+frontend items are in progress (branch `feat/bridge-agent-mode-b-frontend-2026-10-31`).
+
 **Both backends (Laravel and Go, identical behaviour)**
 1. Mode B per AGENT-PROTOCOL.md: migrations for `bridge_agents`, `bridge_agent_sources`,
    `bridge_jobs`, `bridge_job_parts` with RLS policies (and the RLS coverage test); models
@@ -394,8 +406,10 @@ Mode A needs **no platform change**. Optional improvements are marked (opt).
 4. New source type `file_share` (category `unstructured`) for file roots on an agent, its
    result shape (`engine: bridge_files`), counts and drift; `mongodb` through an agent.
 5. Scheduler: lease expiry every minute; daily pruning of parts and stale pending agents.
-6. Owner decision: may every user with `data_discovery,write` create and revoke agents,
-   or only tenant admins (an RBAC change; ask first).
+6. Who manages agents (owner decision of 31 October 2026): `data_discovery,write` and a
+   tenant admin, a DPO or a user with an explicit `ubah` for Data Discovery; others get
+   `403 BRIDGE_MANAGER_ONLY`, and `GET /bridge-agents` reports `meta.can_manage`
+   (AGENT-PROTOCOL.md section 8).
 7. (opt) Mode A: register `mongodb` in `BridgeSourceTypes` (the bridge already accepts
    it); log the bridge's error `code` from the response body for support (the message
    shown to users stays the platform's).
@@ -411,7 +425,9 @@ Mode A needs **no platform change**. Optional improvements are marked (opt).
    source count; create (enrollment token shown once with the install command); renew
    token; rename; rotate; revoke; delete.
 4. Asynchronous test connection and scan for agent systems: poll `GET /bridge-jobs/{id}`,
-   show progress and the Indonesian failure texts by code.
+   show progress and the Indonesian failure texts by code; on opening a linked system,
+   find its running job with `GET /bridge-jobs?information_system_id={id}&active=1`; hide
+   the agent management actions when `meta.can_manage` is false.
 5. i18n keys in `id`, `en` and `ja` for every new label; user-facing text says "pihak ketiga" / "third party", never the forbidden supplier word.
 6. Tutorial pages through the integration tutorial engine (`src/lib/integrasi`) based on
    docs/INSTALL.id.md and docs/INSTALL.en.md, with screenshots once the UI exists.
@@ -444,14 +460,15 @@ service come only from the platform's tests and are marked as such.
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | ? |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | ? |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | ? |
-| 22 | Tests (contract, security, minimisation) | 113 test functions (122 with subtests, many table-driven), incl. both platform clients and a fake platform | ? |
-| 23 | Outbound-only mode | mode B (agent ready; platform proposal) | ? |
+| 22 | Tests (contract, security, minimisation) | 126 test functions (138 with subtests, many table-driven), incl. both platform clients and a fake platform with both lines' field rules | ? |
+| 23 | Outbound-only mode | mode B (agent and both platform lines) | ? |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | ? |
 
 ## 14. Known gaps
 
-- Mode B and file scanning need the platform work of section 12 in both lines and both
-  frontends; until then mode B runs only against the test platform.
+- Mode B and file scanning are implemented in both backends (section 12) and verified end
+  to end against the Laravel line; the frontends are in progress. Two lost token-rotation
+  answers in a row still lock an agent out (AGENT-PROTOCOL.md section 13).
 - No database integration test was run in this environment (no database server was
   available); they exist behind the `integration` build tag with fixtures for all five
   engines. Linux-only paths (symbolic links, systemd install) were compiled and vetted on

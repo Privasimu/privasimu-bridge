@@ -12,15 +12,16 @@ Indonesian version: [INSTALL.id.md](INSTALL.id.md). Design and security details:
 
 **Which mode?**
 
-| | Mode A (available now) | Mode B (agent; needs a Privasimu update) |
+| | Mode A (every Privasimu version) | Mode B (agent; Privasimu with bridge agents) |
 |---|---|---|
 | Direction | Privasimu → bridge (HTTPS, inbound to your network) | bridge → Privasimu (HTTPS, outbound only) |
 | Firewall | open one TCP port to Privasimu's IP addresses only | no inbound port |
 | Certificate | a certificate Privasimu trusts | none on the bridge |
 | What it scans | databases | databases and file shares |
 
-Start with mode A to scan databases today. Sections 1 to 10 describe mode A; section 11
-describes mode B.
+Mode A works with every current Privasimu version. Mode B needs a Privasimu version with
+bridge agents (both lines, from November 2026) and is the way to scan file shares.
+Sections 1 to 10 describe mode A; section 11 describes mode B.
 
 **You need**
 
@@ -36,7 +37,8 @@ describes mode B.
 **Works with both Privasimu Nexus lines.** Privasimu runs on a Laravel backend or a Go
 backend. Both call the bridge with the same contract (contract v1: the same paths,
 headers `X-API-Key` and `X-Contract-Version: 1`, and the same fields), so this guide is
-the same for both. The only difference that matters during installation is how the
+the same for both. In mode B both lines implement the same agent protocol, so the agent
+setup is the same too. The only difference that matters during installation is how the
 Privasimu server trusts an internal certificate (section 4.2). The bridge is a single Go
 program, so your server needs no PHP, web server, database extensions, Oracle Instant
 Client or ODBC driver.
@@ -306,6 +308,8 @@ sources:
   password typed in Privasimu is ignored.
 - `match.host` lets you type an alias such as `corebank` in Privasimu instead of the real
   address, so the address never leaves your network.
+- `label` is the name Privasimu shows for the source in mode B (1 to 128 characters,
+  without control characters). Without a label, the `id` is shown.
 - Instead of `secret:NAME` you can use `env:NAME` (an environment variable) or
   `file:/path` (a Docker secret or systemd credential). A plain password in the file is
   refused.
@@ -321,8 +325,8 @@ sudo privasimu-bridge check
 
 ## 8. File shares (mode B and local reports)
 
-File roots are scanned with mode B (when Privasimu supports it) or locally with the
-command line. Only the folders you list can be read:
+File roots are scanned with mode B or locally with the command line. Only the folders
+you list can be read (at most 200 sources and file roots together):
 
 ```yaml
 files:
@@ -340,6 +344,7 @@ files:
   files); Windows: NTFS read permission for the service account. A share on another
   server needs a domain account or gMSA as the service account (section 9).
 - Links and junctions that point outside a root are never followed.
+- Without `label`, Privasimu shows the root's `id`.
 - Scan and look up a file locally:
   ```sh
   sudo privasimu-bridge files scan hr-share
@@ -404,12 +409,18 @@ Privasimu retries the table list up to three times, scans at most 500 tables and
 columns per table, and gives a scan 120 seconds. For large databases set a **Schema** or
 `schemas` per source.
 
-## 11. Mode B: outbound agent (when Privasimu supports it)
+## 11. Mode B: outbound agent
 
-Mode B needs the Privasimu update described in [AGENT-PROTOCOL.md](AGENT-PROTOCOL.md).
-When it is available:
+Mode B needs a Privasimu version with bridge agents. The Laravel and Go lines implement
+the same agent protocol ([AGENT-PROTOCOL.md](AGENT-PROTOCOL.md)), so these steps are the
+same for both.
 
-1. In Privasimu create a bridge agent; copy the enrollment token (`pvbe_…`, valid 24 hours).
+1. In Privasimu Data Discovery create a bridge agent and copy its enrollment token
+   (`pvbe_…`, shown once, valid 24 hours). Creating, renaming, rotating, revoking and
+   deleting agents is reserved for a tenant admin, a DPO, or a user whose Data Discovery
+   access is set explicitly to `ubah` in Menu Preferences (for the user's division or for
+   the user personally). Other users with Data Discovery access can see the agents and
+   link systems to their sources.
 2. On the bridge server set `agent.platform_url` in `bridge.yaml` (and `agent.proxy_url` /
    `agent.proxy_auth: "secret:proxy_auth"` when the server reaches the internet through a
    proxy; `agent.ca_file` for an on-premise Privasimu with an internal certificate).
@@ -419,9 +430,20 @@ When it is available:
    sudo privasimu-bridge check
    sudo privasimu-bridge service install --mode agent
    ```
-4. In Privasimu link systems to the agent's sources (databases and file roots).
+4. In Privasimu link systems to the agent's sources (databases and file roots). Each
+   source appears with its `label`, or its `id` when it has none.
 
 The agent opens no port; allow outbound HTTPS to Privasimu only.
+
+- **Limits**: at most 200 sources and file roots together, `agent.max_parallel_jobs` 1 to
+  10 and `agent.poll_max` at most 5 minutes; `check` refuses other values.
+- **Token rotation**: after an admin rotates the token in Privasimu, the agent takes a new
+  token on its next poll and keeps it in the encrypted store. If the answer is lost on the
+  way, Privasimu asks again on the next poll and the agent rotates again; its old token
+  keeps working for 10 minutes. Only when two answers in a row are lost must the agent be
+  enrolled again.
+- **Revocation**: a revoked agent stops its running jobs and logs "this agent was
+  revoked". To reconnect, create a new agent in Privasimu and enroll with its token.
 
 ## 12. Troubleshooting
 
