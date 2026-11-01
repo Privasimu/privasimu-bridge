@@ -12,15 +12,16 @@ Versi bahasa Inggris: [INSTALL.en.md](INSTALL.en.md). Rincian desain dan keamana
 
 **Mode mana?**
 
-| | Mode A (tersedia sekarang) | Mode B (agen; butuh pembaruan Privasimu) |
+| | Mode A (semua versi Privasimu) | Mode B (agen; Privasimu yang mendukung agen bridge) |
 |---|---|---|
 | Arah | Privasimu → bridge (HTTPS, masuk ke jaringan Anda) | bridge → Privasimu (HTTPS, hanya keluar) |
 | Firewall | buka satu port TCP hanya untuk IP Privasimu | tidak ada port masuk |
 | Sertifikat | sertifikat yang dipercaya Privasimu | tidak perlu di bridge |
 | Yang dipindai | basis data | basis data dan berbagi berkas |
 
-Mulailah dengan mode A untuk memindai basis data hari ini. Bagian 1 sampai 10 membahas
-mode A; bagian 11 membahas mode B.
+Mode A bekerja dengan semua versi Privasimu saat ini. Mode B memerlukan versi Privasimu
+yang mendukung agen bridge (kedua lini, mulai November 2026) dan merupakan cara memindai
+berbagi berkas. Bagian 1 sampai 10 membahas mode A; bagian 11 membahas mode B.
 
 **Yang Anda perlukan**
 
@@ -37,8 +38,9 @@ mode A; bagian 11 membahas mode B.
 **Bekerja dengan kedua lini Privasimu Nexus.** Privasimu berjalan di backend Laravel atau
 backend Go. Keduanya memanggil bridge dengan kontrak yang sama (kontrak v1: path yang
 sama, header `X-API-Key` dan `X-Contract-Version: 1`, serta isian yang sama), jadi panduan
-ini sama untuk keduanya. Satu-satunya perbedaan yang penting saat pemasangan adalah cara
-server Privasimu memercayai sertifikat internal (bagian 4.2). Bridge adalah satu program
+ini sama untuk keduanya. Di mode B kedua lini menerapkan protokol agen yang sama, jadi
+penyiapan agennya juga sama. Satu-satunya perbedaan yang penting saat pemasangan adalah
+cara server Privasimu memercayai sertifikat internal (bagian 4.2). Bridge adalah satu program
 Go, sehingga server Anda tidak memerlukan PHP, web server, ekstensi basis data, Oracle
 Instant Client, maupun driver ODBC.
 
@@ -314,6 +316,8 @@ sources:
   dan nama basis data; password yang diketik di Privasimu diabaikan.
 - `match.host` memungkinkan Anda mengetik alias seperti `corebank` di Privasimu alih-alih
   alamat sebenarnya, sehingga alamat itu tidak pernah keluar dari jaringan Anda.
+- `label` adalah nama sumber yang ditampilkan Privasimu di mode B (1 sampai 128 karakter,
+  tanpa karakter kendali). Tanpa label, yang ditampilkan adalah `id`.
 - Selain `secret:NAMA`, Anda dapat memakai `env:NAMA` (variabel lingkungan) atau
   `file:/path` (Docker secret atau systemd credential). Password polos di berkas ditolak.
 - **Sampling** mati secara bawaan. Bila aktif, nilai dibaca dan diperiksa di server bridge
@@ -328,8 +332,9 @@ sudo privasimu-bridge --lang id check
 
 ## 8. Berbagi berkas (mode B dan laporan lokal)
 
-Root berkas dipindai lewat mode B (setelah Privasimu mendukungnya) atau secara lokal
-lewat baris perintah. Hanya folder yang Anda daftarkan yang dapat dibaca:
+Root berkas dipindai lewat mode B atau secara lokal lewat baris perintah. Hanya folder
+yang Anda daftarkan yang dapat dibaca (paling banyak 200 sumber dan root berkas
+seluruhnya):
 
 ```yaml
 files:
@@ -347,6 +352,7 @@ files:
   baru); Windows: izin baca NTFS untuk akun layanan. Berbagi berkas di server lain
   memerlukan akun domain atau gMSA sebagai akun layanan (bagian 9).
 - Tautan (symlink) dan junction yang mengarah ke luar root tidak pernah diikuti.
+- Tanpa `label`, Privasimu menampilkan `id` root.
 - Pindai dan cari berkas secara lokal:
   ```sh
   sudo privasimu-bridge --lang id files scan hr-share
@@ -411,12 +417,18 @@ Privasimu mencoba ulang daftar tabel hingga tiga kali, memindai paling banyak 50
 dan 1000 kolom per tabel, dan memberi satu pemindaian waktu 120 detik. Untuk basis data
 besar, isi **Skema** atau `schemas` per sumber.
 
-## 11. Mode B: agen keluar (setelah Privasimu mendukungnya)
+## 11. Mode B: agen keluar
 
-Mode B memerlukan pembaruan Privasimu yang dijelaskan di [AGENT-PROTOCOL.md](AGENT-PROTOCOL.md).
-Setelah tersedia:
+Mode B memerlukan versi Privasimu yang mendukung agen bridge. Lini Laravel dan lini Go
+menerapkan protokol agen yang sama ([AGENT-PROTOCOL.md](AGENT-PROTOCOL.md)), jadi
+langkah-langkah ini sama untuk keduanya.
 
-1. Di Privasimu buat agen bridge; salin token pendaftarannya (`pvbe_…`, berlaku 24 jam).
+1. Di Data Discovery Privasimu buat agen bridge, lalu salin token pendaftarannya
+   (`pvbe_…`, hanya ditampilkan sekali, berlaku 24 jam). Membuat, mengganti nama,
+   merotasi token, mencabut, dan menghapus agen hanya boleh dilakukan admin tenant, DPO,
+   atau pengguna yang akses Data Discovery-nya diatur tegas ke `ubah` di Menu Preferences
+   (untuk divisinya atau untuk dirinya sendiri). Pengguna lain yang punya akses Data
+   Discovery dapat melihat agen dan menautkan sistem ke sumber-sumbernya.
 2. Di server bridge isi `agent.platform_url` di `bridge.yaml` (dan `agent.proxy_url` /
    `agent.proxy_auth: "secret:proxy_auth"` bila server keluar ke internet lewat proxy;
    `agent.ca_file` untuk Privasimu on-premise dengan sertifikat internal).
@@ -427,8 +439,21 @@ Setelah tersedia:
    sudo privasimu-bridge service install --mode agent
    ```
 4. Di Privasimu tautkan sistem ke sumber-sumber agen (basis data dan root berkas).
+   Setiap sumber tampil dengan `label`-nya, atau `id`-nya bila tidak berlabel.
 
 Agen tidak membuka port; cukup izinkan HTTPS keluar ke Privasimu.
+
+- **Batas**: paling banyak 200 sumber dan root berkas seluruhnya,
+  `agent.max_parallel_jobs` 1 sampai 10, dan `agent.poll_max` paling lama 5 menit;
+  `check` menolak nilai lain.
+- **Rotasi token**: setelah admin merotasi token di Privasimu, agen mengambil token baru
+  pada poll berikutnya dan menyimpannya di penyimpanan terenkripsi. Bila jawabannya hilang
+  di jalan, Privasimu meminta lagi pada poll berikutnya dan agen merotasi lagi; token
+  lamanya tetap berlaku 10 menit. Agen baru perlu didaftarkan ulang bila dua jawaban
+  berturut-turut hilang.
+- **Pencabutan**: agen yang dicabut menghentikan tugas yang sedang berjalan dan mencatat
+  "this agent was revoked" di log. Untuk menyambung lagi, buat agen baru di Privasimu lalu
+  daftarkan dengan tokennya.
 
 ## 12. Pemecahan masalah
 
