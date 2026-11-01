@@ -55,7 +55,13 @@ func TestStoreRoundTripAndTamperDetection(t *testing.T) {
 	// Flip one byte of the ciphertext: GCM must refuse it.
 	var sf storeFile
 	_ = json.Unmarshal(raw, &sf)
-	sf.Ciphertext = "A" + sf.Ciphertext[1:]
+	// Replace the first character with a different one. A fixed "A" was a no-op whenever the
+	// ciphertext already started with "A", so the tamper check passed by chance about 1 in 64 runs.
+	first := "A"
+	if strings.HasPrefix(sf.Ciphertext, "A") {
+		first = "B"
+	}
+	sf.Ciphertext = first + sf.Ciphertext[1:]
 	tampered, _ := json.Marshal(sf)
 	_ = os.WriteFile(storePath, tampered, 0o600)
 	if _, err := Open(storePath, key); err == nil {
