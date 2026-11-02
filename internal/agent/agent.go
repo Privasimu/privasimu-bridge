@@ -21,6 +21,7 @@ import (
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/files"
+	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 )
 
@@ -30,6 +31,8 @@ type Deps struct {
 	Client   *Client
 	Resolver *secrets.Resolver
 	Files    *files.Service
+	// Packages runs package scans (job scan_packages); nil when no target is configured.
+	Packages *packages.Service
 	Audit    *audit.Logger
 	Log      *slog.Logger
 	// Open connects to a database; tests replace it.
@@ -42,6 +45,7 @@ type Agent struct {
 	client   *Client
 	resolver *secrets.Resolver
 	files    *files.Service
+	packages *packages.Service
 	audit    *audit.Logger
 	log      *slog.Logger
 	open     func(ctx context.Context, t dbsource.Target) (dbsource.Conn, error)
@@ -67,6 +71,10 @@ type Agent struct {
 	sleep func(ctx context.Context, d time.Duration) bool
 	// minRenew is the shortest interval between lease renewals.
 	minRenew time.Duration
+	// packagesFeature is whether the last poll answer listed source_kind:packages: only
+	// then does the inventory include packages targets (an older platform refuses the whole
+	// inventory on an unknown kind).
+	packagesFeature bool
 }
 
 // State is what enrollment leaves in the state directory.
@@ -119,7 +127,7 @@ var ErrNotEnrolled = errors.New("the agent is not enrolled")
 
 // New builds an enrolled agent.
 func New(d Deps) (*Agent, error) {
-	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, audit: d.Audit, log: d.Log,
+	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, packages: d.Packages, audit: d.Audit, log: d.Log,
 		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
 		sleep: sleepCtx, minRenew: 5 * time.Second}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }
@@ -188,9 +196,11 @@ func wireVersion(v string) string {
 	return string(b)
 }
 
-// Inventory lists what the agent may scan: database sources and usable file roots. The
-// list is never null: both platform lines refuse "sources": null.
-func Inventory(cfg *config.Config, fs *files.Service) ([]Source, string) {
+// Inventory lists what the agent may scan: database sources, usable file roots and, when
+// withPackages is true (the platform listed source_kind:packages), packages targets. The
+// list is never null: both platform lines refuse "sources": null. The digest is computed
+// over exactly what is sent, so it changes when packages targets start to be sent.
+func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, withPackages bool) ([]Source, string) {
 	out := []Source{}
 	for i := range cfg.Sources {
 		src := &cfg.Sources[i]
@@ -214,10 +224,36 @@ func Inventory(cfg *config.Config, fs *files.Service) ([]Source, string) {
 			out = append(out, Source{ID: r.ID, Kind: "files", Engine: "filesystem", Label: labelOf(r.Label, r.ID), Description: desc, Capabilities: caps})
 		}
 	}
+	if withPackages {
+		out = append(out, packageSources(cfg, pk)...)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	raw, _ := json.Marshal(out)
 	sum := sha256.Sum256(raw)
 	return out, "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// packageSources describes the packages targets: kind packages, the target kind as the
+// engine, and the capabilities matcher:<grype|trivy|none> and, when known, os:<id>.
+func packageSources(cfg *config.Config, pk *packages.Service) []Source {
+	var infos []packages.TargetInfo
+	if pk != nil {
+		infos = pk.Describe()
+	} else {
+		for _, t := range cfg.Packages.Targets {
+			infos = append(infos, packages.TargetInfo{ID: t.ID, Label: t.Label, Description: t.Description, Kind: t.Kind,
+				Matcher: cfg.Packages.Tools.Matcher})
+		}
+	}
+	out := make([]Source, 0, len(infos))
+	for _, t := range infos {
+		caps := []string{"matcher:" + t.Matcher}
+		if t.OS != "" {
+			caps = append(caps, "os:"+t.OS)
+		}
+		out = append(out, Source{ID: t.ID, Kind: "packages", Engine: t.Kind, Label: labelOf(t.Label, t.ID), Description: t.Description, Capabilities: caps})
+	}
+	return out
 }
 
 // labelOf returns the label the platform requires (1 to 128 characters): the configured
@@ -234,6 +270,14 @@ func labelOf(label, id string) string {
 // ends, after running jobs have stopped.
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("bridge agent started", "agent_id", a.agentID, "version", buildinfo.Version, "jobs", a.cfg.Agent.AllowedJobs)
+	var schedule sync.WaitGroup
+	if a.packages != nil && len(a.cfg.Packages.Targets) > 0 {
+		schedule.Add(1)
+		go func() {
+			defer schedule.Done()
+			a.packages.RunSchedule(ctx)
+		}()
+	}
 	minPoll, maxPoll := a.cfg.Agent.PollMin.D(), a.cfg.Agent.PollMax.D()
 	backoff := minPoll
 	inventorySent := false
@@ -255,6 +299,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	a.jobs.Wait()
+	schedule.Wait()
 	a.log.Info("bridge agent stopped")
 	return nil
 }
@@ -262,7 +307,10 @@ func (a *Agent) Run(ctx context.Context) error {
 // pollOnce sends one poll and starts the jobs it returns. It reports how long to wait
 // before the next poll (0 = use backoff) and whether the poll succeeded.
 func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duration, bool) {
-	sources, digest := Inventory(a.cfg, a.files)
+	a.mu.Lock()
+	withPackages := a.packagesFeature
+	a.mu.Unlock()
+	sources, digest := Inventory(a.cfg, a.files, a.packages, withPackages)
 	a.mu.Lock()
 	running := make([]string, 0, len(a.running))
 	for id := range a.running {
@@ -288,7 +336,17 @@ func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duratio
 	if unsaved != "" {
 		a.storeToken(unsaved)
 	}
-	if resp.InventoryRequested || !*inventorySent {
+	// The inventory follows what this platform accepts: packages targets only once it
+	// lists source_kind:packages (and no longer when a downgraded platform stops listing it).
+	featureChanged := false
+	if now := resp.HasFeature(FeatureSourceKindPackages); now != withPackages {
+		a.mu.Lock()
+		a.packagesFeature = now
+		a.mu.Unlock()
+		featureChanged = true
+		sources, digest = Inventory(a.cfg, a.files, a.packages, now)
+	}
+	if resp.InventoryRequested || !*inventorySent || featureChanged {
 		ictx, cancel := context.WithTimeout(ctx, requestTimeout)
 		if err := a.client.PutSources(ictx, SourcesRequest{SourcesDigest: digest, Sources: sources}); err != nil {
 			a.log.Warn("inventory could not be sent", "error", err.Error())

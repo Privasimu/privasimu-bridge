@@ -23,6 +23,7 @@ type Config struct {
 	Agent     AgentConfig     `yaml:"agent"`
 	Sources   []SourceConfig  `yaml:"sources"`
 	Files     FilesConfig     `yaml:"files"`
+	Packages  PackagesConfig  `yaml:"packages"`
 	Detection DetectionConfig `yaml:"detection"`
 	Secrets   SecretsConfig   `yaml:"secrets"`
 	Audit     AuditConfig     `yaml:"audit"`
@@ -460,6 +461,7 @@ func (c *Config) applyDefaults() {
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
+	c.applyPackageDefaults()
 }
 
 // DefaultPort returns the usual port of an engine (0 when unknown).

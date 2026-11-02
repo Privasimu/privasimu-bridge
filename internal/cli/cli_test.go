@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -103,3 +104,37 @@ func TestPlainPasswordInConfigIsRefused(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// TestCheckVerifiesPackageScanners: check reports a pinned tool whose checksum differs, a
+// missing tool, a target that cannot be read, and that scan_packages is not allowed.
+func TestCheckVerifiesPackageScanners(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "syft")
+	if err := os.WriteFile(tool, []byte("not the pinned build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(dir, "app")
+	_ = os.MkdirAll(app, 0o755)
+	zero := strings.Repeat("0", 64)
+	yaml := "packages:\n  targets:\n" +
+		"    - {id: app, kind: directory, path: " + quoteYAML(app) + "}\n" +
+		"    - {id: gone, kind: directory, path: " + quoteYAML(filepath.Join(dir, "gone")) + "}\n" +
+		"  tools:\n    syft: {path: " + quoteYAML(tool) + ", sha256: " + zero + "}\n" +
+		"    grype: {path: " + quoteYAML(filepath.Join(dir, "grype")) + ", sha256: " + zero + "}\n"
+	cfgPath := filepath.Join(dir, "bridge.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, "", "--config", cfgPath, "check")
+	for _, want := range []string{"scan_packages", "package scanner syft", "does not match the sha256", "package scanner grype",
+		"missing or not a regular file", "packages target app: directory", "packages target gone"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("check output lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	if r.code != 1 {
+		t.Fatalf("check must fail: %d", r.code)
+	}
+}
+
+func quoteYAML(s string) string { return strconv.Quote(s) }

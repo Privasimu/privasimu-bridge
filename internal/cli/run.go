@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/i18n"
+	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 	"github.com/privasimu/bridge/internal/server"
 	"github.com/privasimu/bridge/internal/service"
@@ -105,8 +107,13 @@ func (a *app) cmdAgent(args []string) error {
 		if err != nil {
 			return err
 		}
+		psvc, err := packages.NewService(cfg, log, auditLog)
+		if err != nil {
+			return err
+		}
+		warnPackageTools(cfg, log)
 		ag, err := agent.New(agent.Deps{Config: cfg, Client: client, Resolver: secrets.NewResolver(cfg), Files: fsvc,
-			Audit: auditLog, Log: log})
+			Packages: psvc, Audit: auditLog, Log: log})
 		if err != nil {
 			if errors.Is(err, agent.ErrNotEnrolled) {
 				return errors.New(i18n.T("cli.agent.not_enrolled"))
@@ -167,4 +174,19 @@ func (a *app) cmdEnroll(args []string) error {
 	}
 	a.printf("cli.enroll.done", resp.AgentID, resp.Organization.Name)
 	return nil
+}
+
+// warnPackageTools logs, when the agent starts, every package scanner that does not match
+// its pinned checksum. The agent still starts (database and file jobs do not need them);
+// scan_packages jobs then fail with tool_missing or tool_checksum_mismatch.
+func warnPackageTools(cfg *config.Config, log *slog.Logger) {
+	if len(cfg.Packages.Targets) == 0 || !cfg.Agent.JobAllowed(config.JobScanPackages) {
+		return
+	}
+	for name, t := range packages.Tools(cfg) {
+		if err := packages.VerifyTool(t); err != nil {
+			log.Error("package scanner is not usable; scan_packages jobs will fail until it is fixed (see: privasimu-bridge check)",
+				"tool", name, "problem", packages.ToolProblem(err))
+		}
+	}
 }

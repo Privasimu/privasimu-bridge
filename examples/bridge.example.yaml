@@ -81,13 +81,16 @@ agent:
   ca_file: ""                       # extra CA for an on-premise Privasimu
   proxy_url: ""                     # e.g. http://proxy.example.co.id:8080
   proxy_auth: ""                    # e.g. secret:proxy_auth (value "user:password")
+  # scan_packages (software inventory and vulnerability matching, see packages: below) is
+  # opt-in: add it here to allow it. The agent then announces job:scan_packages.
   allowed_jobs: [test_source, scan_database, scan_files]
   max_parallel_jobs: 1              # 1 to 10
   poll_min: 5s                      # at least 1s; the platform suggests 5s or 15s itself
   poll_max: 5m                      # at most 5m: a lost token rotation is retried in time
 
 # ---------------------------------------------------------------------------------------
-# Databases this bridge may scan (at most 200 sources and file roots together).
+# Databases this bridge may scan (at most 200 sources, file roots and packages targets
+# together).
 # ---------------------------------------------------------------------------------------
 sources:
   - id: core-banking                # lower case, digits, - _ . (used in mode B and logs)
@@ -173,6 +176,53 @@ files:
       max_depth: 64
       report_paths: hashed
       refresh_interval: 24h         # rescan in the background; 0 = on request only
+
+# ---------------------------------------------------------------------------------------
+# Software inventory and vulnerability matching (mode B job scan_packages, opt-in through
+# agent.allowed_jobs). Syft lists the installed packages, Grype or Trivy matches them
+# against vulnerability data. The bridge never downloads these tools: install them
+# yourself (or use the privasimu-bridge:<version>-scan image) and pin each one by path and
+# SHA-256 ("sha256sum /opt/privasimu-bridge/tools/syft"); the checksum is verified before
+# every run. Only package names, versions, licences and vulnerability ids are sent; no
+# path, file or SBOM leaves this server. Targets are read only; nothing is scanned over the
+# network.
+# ---------------------------------------------------------------------------------------
+packages:
+  targets:
+    - id: web-01                    # inventory id, as for sources and file roots
+      label: "Web 01"               # default: the id
+      kind: host                    # host | directory | image_archive
+      path: /                       # only kind host may start at /
+      exclude: [/proc, /sys, /dev, /run, /tmp, /var/lib/docker]   # /proc /sys /dev /run always
+      refresh_interval: 24h         # rescan in the background; 0 = on request only (min 1h)
+    - id: billing-app
+      label: "Billing application"
+      kind: directory               # one application or deployment folder
+      path: /srv/billing
+      exclude: ["./**/test/**"]     # absolute paths below the target, or globs starting ./
+    - id: billing-image
+      label: "Billing image 1.4.2"
+      kind: image_archive           # a local "docker save" or OCI archive file; no Docker
+      path: /srv/images/billing-1.4.2.tar   # socket and no registry pull
+  tools:
+    # Replace the zeros with the SHA-256 of each executable.
+    syft: {path: /opt/privasimu-bridge/tools/syft, sha256: "0000000000000000000000000000000000000000000000000000000000000000"}
+    matcher: grype                  # grype | trivy | none (default: the tool configured)
+    grype:
+      path: /opt/privasimu-bridge/tools/grype
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      # db_dir: <state_dir>/grype-db   (default; must be inside state_dir)
+      db_update_url: ""             # an in-network mirror of the Grype database (https)
+      db_auto_update: false         # false: import or update the database yourself
+      db_max_age: 120h              # older databases are refused (matcher_db_unavailable)
+    trivy:
+      path: /opt/privasimu-bridge/tools/trivy
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      # cache_dir: <state_dir>/trivy   (default; must be inside state_dir)
+      db_repository: ""             # e.g. a mirror such as registry.example.co.id/trivy-db:2
+      skip_db_update: true          # true: use the local database only
+  timeout: 30m                      # per scan, 1m to 6h (the platform may only lower it)
+  max_packages: 20000               # packages sent per scan, at most 20000
 
 detection:
   sampling:

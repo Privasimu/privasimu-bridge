@@ -17,6 +17,7 @@ import (
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/detect"
 	"github.com/privasimu/bridge/internal/files"
+	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/scan"
 )
 
@@ -30,6 +31,10 @@ const (
 	partMaxItems      = 200
 	partMaxBytes      = 512 << 10
 	uploadAttempts    = 5
+	// maxParts is the most parts the platform accepts for one job (seq 0 to 499).
+	maxParts = 500
+	// packagesDeadline is the most a platform may give a package scan (deadline_seconds).
+	packagesDeadline = time.Hour
 )
 
 // jobError is a failure reported to the platform with codes only.
@@ -260,6 +265,30 @@ func (a *Agent) retry(ctx context.Context, fn func(context.Context) error) error
 	return err
 }
 
+// partsFit returns how many of the items fit into maxParts parts, split the way upload
+// splits them (at most partMaxItems items and partMaxBytes bytes per part).
+func partsFit(items []any) (int, error) {
+	parts, count, size := 0, 0, 0
+	for i, it := range items {
+		raw, err := json.Marshal(it)
+		if err != nil {
+			return i, err
+		}
+		if len(raw) > partMaxBytes {
+			return i, failure("limit", FailResultTooLarge, "upload", false)
+		}
+		if count == 0 || count >= partMaxItems || size+len(raw) > partMaxBytes {
+			if parts == maxParts {
+				return i, nil
+			}
+			parts, count, size = parts+1, 0, 0
+		}
+		count++
+		size += len(raw)
+	}
+	return len(items), nil
+}
+
 // upload sends the items in numbered parts of bounded size and returns how many parts
 // were sent.
 func (a *Agent) upload(ctx context.Context, job Job, kind string, items []any) (int, error) {
@@ -302,15 +331,17 @@ func (a *Agent) upload(ctx context.Context, job Job, kind string, items []any) (
 // execute runs the work of a job and returns the result, the part items and their kind.
 func (a *Agent) execute(ctx context.Context, job Job, prog *progressState, ev *audit.Event) (any, []any, string, error) {
 	if !a.cfg.Agent.JobAllowed(job.Type) {
-		if job.Type != JobTestSource && job.Type != JobScanDatabase && job.Type != JobScanFiles {
+		if job.Type != JobTestSource && job.Type != JobScanDatabase && job.Type != JobScanFiles && job.Type != JobScanPackages {
 			return nil, nil, "", failure("config", FailUnsupportedJob, "accept", false)
 		}
 		return nil, nil, "", failure("config", FailJobNotAllowed, "accept", false)
 	}
 	src, isDB := a.cfg.Source(job.SourceID)
 	_, isRoot := a.cfg.Root(job.SourceID)
+	_, isTarget := a.cfg.PackageTarget(job.SourceID)
 	switch {
-	case job.Type == JobScanDatabase && !isDB, job.Type == JobScanFiles && !isRoot, job.Type == JobTestSource && !isDB && !isRoot:
+	case job.Type == JobScanDatabase && !isDB, job.Type == JobScanFiles && !isRoot, job.Type == JobTestSource && !isDB && !isRoot,
+		job.Type == JobScanPackages && !isTarget:
 		return nil, nil, "", failure("config", FailSourceNotFound, "accept", false)
 	}
 	switch job.Type {
@@ -323,9 +354,81 @@ func (a *Agent) execute(ctx context.Context, job Job, prog *progressState, ev *a
 		return r, nil, "", err
 	case JobScanDatabase:
 		return a.scanDatabase(ctx, job, src, prog, ev)
+	case JobScanPackages:
+		return a.scanPackages(ctx, job, prog, ev)
 	default:
 		return a.scanFiles(ctx, job, prog, ev)
 	}
+}
+
+// scanPackages answers a scan_packages job: a stored report of the target when it is recent
+// enough (unless the job asks to refresh), else a new scan; then the items are cut to what
+// fits in the parts the platform accepts.
+func (a *Agent) scanPackages(ctx context.Context, job Job, prog *progressState, ev *audit.Event) (any, []any, string, error) {
+	if a.packages == nil {
+		return nil, nil, "", failure("config", FailSourceNotFound, "accept", false)
+	}
+	o := job.Options
+	opts := packages.ScanOptions{Refresh: o.Refresh, Match: o.Match == nil || *o.Match}
+	if o.MaxAgeSeconds > 0 {
+		opts.MaxAge = time.Duration(o.MaxAgeSeconds) * time.Second
+	}
+	if o.DeadlineSeconds > 0 {
+		opts.Timeout = min(time.Duration(o.DeadlineSeconds)*time.Second, packagesDeadline)
+	}
+	target, _ := a.cfg.PackageTarget(job.SourceID)
+	ev.Engine = target.Kind
+	rep, err := a.packages.Run(ctx, job.SourceID, opts, func(stage string) { prog.set(stage, 0, 0) })
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, "", ctx.Err()
+		}
+		return nil, nil, "", packageFailure(err)
+	}
+	result := rep.Result
+	result.BridgeVersion = buildinfo.Version
+	items := make([]any, 0, len(rep.Items))
+	for _, it := range rep.Items {
+		items = append(items, it)
+	}
+	fit, err := partsFit(items)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if fit < len(items) {
+		for _, it := range rep.Items[fit:] {
+			result.MatchesTotal -= len(it.Matches)
+		}
+		items, result.Truncated = items[:fit], true
+	}
+	ev.Counts = map[string]int{"packages": len(items), "matches": result.MatchesTotal}
+	prog.set("upload", len(items), len(items))
+	return result, items, PartPackages, nil
+}
+
+// packageFailure reports a package scan failure with the codes of revision 3.
+func packageFailure(err error) *jobError {
+	var pe *packages.Error
+	if !errors.As(err, &pe) {
+		if errors.Is(err, packages.ErrUnknownTarget) {
+			return failure("config", FailSourceNotFound, "accept", false)
+		}
+		return failure("internal", FailInternal, "run", true)
+	}
+	stage := pe.Stage // target, tool, output, run, inventory or matching
+	switch pe.Code {
+	case packages.CodeToolMissing:
+		return failure("config", FailToolMissing, stage, false)
+	case packages.CodeToolChecksum:
+		return failure("config", FailToolChecksum, stage, false)
+	case packages.CodeToolTimeout:
+		return failure("timeout", FailToolTimeout, stage, true)
+	case packages.CodeMatcherDB:
+		return failure("config", FailMatcherDB, stage, false)
+	case packages.CodeTargetUnreadable:
+		return failure("permission", FailTargetUnreadable, stage, false)
+	}
+	return failure("internal", FailToolFailed, stage, true)
 }
 
 func (a *Agent) target(src *config.SourceConfig) (dbsource.Target, error) {
