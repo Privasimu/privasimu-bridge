@@ -1,10 +1,14 @@
 # Agent protocol 1 (mode B): platform contract
 
-Status: **normative, revision 2 (1 November 2026)**. The agent side is implemented and
+Status: **normative, revision 3 (2 November 2026)**. The agent side is implemented and
 tested in this repository (`internal/agent`, against an in-memory platform that follows
 this document, `internal/agent/fakeplatform_test.go`). Both Privasimu Nexus lines implement
 the platform side (branch `feat/bridge-agent-mode-b-2026-10-31` in each backend); revision 2
-records what they settled after the Laravel line ran the real binary end to end (section 13).
+records what they settled after the Laravel line ran the real binary end to end, revision 3
+adds package scans for the security posture per RoPA ("DSPM", phase 1): the platform
+feature list, the inventory kind and part kind `packages`, the job `scan_packages` and its
+failure codes (section 13). Every revision 3 addition is negotiated in both directions, so
+an agent and a platform of different revisions keep working together.
 
 This document is the single contract for **both platform lines**: the Laravel backend
 (`backend`, repositories priva-back and api-privasimu-nexus) and the Go backend
@@ -46,8 +50,8 @@ sequenceDiagram
 ```
 
 The agent never listens on a port. It names what it may scan (its **inventory**: database
-sources and file roots from its local configuration, by id, without hosts, paths or
-credentials). The platform creates **jobs** that name an inventory id; it can never send
+sources, file roots and, since revision 3, packages targets from its local configuration,
+by id, without hosts, paths or credentials). The platform creates **jobs** that name an inventory id; it can never send
 a host, a path, a credential, a query or anything that widens what the local
 configuration allows.
 
@@ -231,6 +235,10 @@ Request:
 Rules: as enroll for the agent fields; `sources_digest` is `""` or a *digest*;
 `running_jobs` at most 50 *uuid*; `max_jobs` 0 to 10.
 
+`capabilities` holds `job:<type>` for every job type the agent's `agent.allowed_jobs`
+allows. `job:scan_packages` appears **only** when the operator added `scan_packages` to
+`allowed_jobs` (opt-in, never a default). The platform stores the list on every poll.
+
 Effect: update `last_seen_at` (at most one write per 30 seconds is enough), `version`,
 `protocol`, `os`, `arch`, `capabilities`, `last_ip`. Then expire this agent's leases
 (section 6.1) and lease up to `min(max_jobs, 4)` jobs of this agent in state `queued`,
@@ -238,7 +246,7 @@ oldest `queued_at` first (ties by `id`), each as in section 6.1.
 
 Response `200` (key order as shown):
 ```json
-{"jobs":[{"job_id":"3d5c6e70-1111-4000-8000-000000000002","type":"scan_database","source_id":"core-banking","lease_token":"pvbl_…","lease_seconds":120,"attempt":1,"created_at":"2026-10-31T12:00:00Z","options":{"max_tables":500}}],"next_poll_seconds":5,"inventory_requested":false,"token_rotation_requested":false,"server_time":"2026-10-31T12:00:05Z"}
+{"jobs":[{"job_id":"3d5c6e70-1111-4000-8000-000000000002","type":"scan_database","source_id":"core-banking","lease_token":"pvbl_…","lease_seconds":120,"attempt":1,"created_at":"2026-10-31T12:00:00Z","options":{"max_tables":500}}],"next_poll_seconds":5,"inventory_requested":false,"token_rotation_requested":false,"server_time":"2026-10-31T12:00:05Z","platform_features":["source_kind:packages","job:scan_packages"]}
 ```
 - `jobs`: `[]` when none.
 - `next_poll_seconds`: 5 when this agent still has `queued` jobs after leasing, else 15.
@@ -246,6 +254,24 @@ Response `200` (key order as shown):
 - `token_rotation_requested`: true when an admin asked to rotate (section 8) **or** when
   this request was authenticated with the previous token (the answer of the agent's last
   rotation was lost, section 3). The agent rotates whenever it is true.
+- `platform_features` (revision 3, always the last key): what the platform supports beyond
+  revision 2. Both lines emit exactly `["source_kind:packages","job:scan_packages"]`, in this
+  order, once they ship revision 3. A platform of revision 2 sends no such key; the agent
+  treats a missing key like `[]` and ignores unknown entries (unknown keys of an answer are
+  ignored, section 4).
+
+**Negotiation (revision 3).** Both directions are opt-in:
+
+| Direction | Signal | Effect |
+|---|---|---|
+| agent → platform | `job:scan_packages` in `capabilities` (only when `scan_packages` is in `agent.allowed_jobs`) | the platform may queue `scan_packages` for this agent; for any other agent the tenant action answers `409 AGENT_CAPABILITY_MISSING` (section 8) |
+| platform → agent | `source_kind:packages` in `platform_features` | the agent includes inventory entries of kind `packages` in `PUT /sources` (section 5.3) |
+
+The agent decides from the **last** poll answer: when `source_kind:packages` appears, it
+sends its inventory again at once (now with the packages targets, so the digest changes);
+when a platform stops listing it (a downgrade), the agent sends the inventory without them.
+A revision 2 platform refuses a whole inventory with an unknown kind, which is why the agent
+never sends kind `packages` before the platform asked for it.
 
 The agent asks for `max_jobs` of at most 10 and waits `next_poll_seconds` between polls,
 within its configured `poll_min` (at least 1 s) and `poll_max` (at most 5 minutes, so a
@@ -261,17 +287,35 @@ Request:
 ```
 Rules: `sources_digest` *digest*; `sources` a list (`[]` when the agent offers nothing,
 never `null`) of at most 200 objects with unique *id*; `kind` `database` (engine
-`postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`) or `files` (engine `filesystem`);
+`postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`), `files` (engine `filesystem`) or,
+since revision 3, `packages` (engine `host`, `directory` or `image_archive`);
 `label` *label* (required: one invalid entry refuses the whole inventory); `description`
 absent, `null` or *text* (an empty string is stored as `null`); `capabilities` a list of
 at most 16 strings `^[a-z0-9_:,.-]{1,64}$`.
+
+**Kind `packages`** (revision 3) names a system whose installed software the agent may list
+(job `scan_packages`): `host` an installed system (normally its root `/`), `directory` one
+application or deployment folder, `image_archive` a container image saved as a local OCI or
+`docker save` archive file (no Docker socket and no registry pull in phase 1). Its
+`capabilities` are `matcher:grype`, `matcher:trivy` or `matcher:none` (always one), then
+`os:<id>` when the agent knows the operating system (`os-release` `ID` of a host, or the
+last scan), for example `["matcher:grype","os:ubuntu"]`. The agent sends kind `packages`
+only after a poll answer listed `source_kind:packages` (section 5.2). Such entries are never
+offered to Data Discovery: linking an information system to one is refused with the
+existing `BRIDGE_SOURCE_MISMATCH` (section 8).
+
+```json
+{"id":"web-01","kind":"packages","engine":"host","label":"Web 01","capabilities":["matcher:grype","os:ubuntu"]}
+```
 
 The bridge sends the id as the label when its configuration has none, and its
 configuration check refuses more than 200 sources and file roots together, so an
 inventory it sends is always accepted.
 
-The digest is computed by the agent (SHA-256 of its JSON inventory); the platform stores
-it and never recomputes it.
+The digest is computed by the agent (SHA-256 of its JSON inventory) over exactly the
+entries it sends; the platform stores it and never recomputes it. When packages entries
+start (or stop) being sent, the digest changes, so the platform also asks for the
+inventory (`inventory_requested`) if the agent's immediate resend was lost.
 
 Effect: upsert by (`agent_id`, `id`); delete the ids not listed (systems linked to a
 deleted id show "source not on agent" and cannot be scanned); store the digest. The
@@ -298,8 +342,9 @@ the job, `cancel_requested` is true; the agent stops and sends `fail` with
 Header `X-Lease-Token`. Uploads one slice of the result. Body at most 1 MiB.
 
 Request: `{"seq":0,"kind":"tables","items":[…]}` — `seq` 0 to 499; `kind` `tables` for
-`scan_database`, `files` for `scan_files` (else 400); `items` 1 to 1000 objects
-(section 6.4 and 6.5).
+`scan_database`, `files` for `scan_files`, `packages` for `scan_packages` (revision 3;
+else 400); `items` 1 to 1000 objects (sections 6.4, 6.5 and 6.7). The agent sends at most
+200 items and 512 KiB of items per part.
 
 Effect: store the raw request body and its SHA-256 under (`job_id`, `seq`); renew the
 lease. The same `seq` again with an identical body (same SHA-256) is accepted again
@@ -317,7 +362,9 @@ Request: `{"parts":3,"result":{…}}` — `parts` 0 to 500; `result` per job typ
 Checks: parts `0 … parts-1` received and none with `seq ≥ parts`, else
 `409 parts_incomplete`; `result` valid for the job type, else `400 invalid_request`.
 
-Effect: persist (section 7), job `completed`, `finished_at`, parts deleted.
+Effect: persist (section 7), job `completed`, `finished_at`, parts deleted. Parts are
+persisted **as a stream**: one stored part is decoded, applied and released before the next
+(a `scan_packages` job may carry 20 000 items; neither line decodes every part at once).
 
 Response `200`: `{"status":"completed"}`. A repeated `complete` for a job already
 `completed` under the same lease returns the same `200` (the first response may have
@@ -386,11 +433,22 @@ is revoked while it holds jobs.
 | `test_source` | a database source or a file root | none |
 | `scan_database` | a database source | `schema`, `max_tables` (≤ 500), `max_columns` (≤ 1000), `sampling` (only `false` has an effect), `deadline_seconds` |
 | `scan_files` | a file root | `refresh`, `max_age_seconds`, `deadline_seconds` |
+| `scan_packages` (revision 3) | a packages target | `refresh`, `max_age_seconds`, `deadline_seconds` (≤ 3600), `match` |
 
 `options` lists only the keys that were set, in this order: `schema`, `max_tables`,
-`max_columns`, `sampling`, `deadline_seconds`, `refresh`, `max_age_seconds`; `{}` when
-none. Options can only narrow what the agent's local configuration allows: the platform
-can lower limits, narrow to an allowed schema or switch sampling off, never on.
+`max_columns`, `sampling`, `deadline_seconds`, `refresh`, `max_age_seconds`, `match`; `{}`
+when none. Options can only narrow what the agent's local configuration allows: the
+platform can lower limits, narrow to an allowed schema or switch sampling off, never on.
+
+`scan_packages` options: `refresh` (bool) scans now; otherwise the agent answers with its
+stored report of the target when it is younger than `max_age_seconds` (default 24 hours),
+like `scan_files`. The agent also rescans a target in the background on its local
+`refresh_interval`. `deadline_seconds` (at most 3600) lowers the agent's configured scan
+timeout. `match` (bool, default true) runs the configured matcher; `false` sends the
+inventory only (every item's `matches` is `[]` and the result's `matcher` is `none`). The
+platform queues `scan_packages` only for agents whose stored `capabilities` contain
+`job:scan_packages`; an agent that receives it without allowing it fails it with
+`job_not_allowed`.
 
 ### 6.3 Result of `test_source` (no parts)
 
@@ -469,10 +527,117 @@ No file content ever appears.
 | `internal_error` | Galat internal di bridge. |
 | `agent_timeout` (platform) | Bridge tidak menyelesaikan tugas tepat waktu. |
 | `agent_revoked` (platform) | Agen bridge sudah dicabut. |
+| `tool_missing` | Alat pindai paket (Syft/Grype/Trivy) belum terpasang di server agen. |
+| `tool_checksum_mismatch` | Berkas alat pindai paket tidak cocok dengan checksum di konfigurasi agen. |
+| `tool_failed` | Alat pindai paket gagal dijalankan. |
+| `tool_timeout` | Pindai paket melewati batas waktu. |
+| `matcher_db_unavailable` | Basis data kerentanan di agen belum tersedia atau kedaluwarsa. |
+| `target_unreadable` | Agen tidak dapat membaca target pindai paket. |
 | any other code | Pemindaian lewat bridge gagal. |
+
+The six package codes (revision 3) come with this `error_kind` and `retryable`:
+
+| `error_code` | `error_kind` | `retryable` | When |
+|---|---|---|---|
+| `tool_missing` | `config` | false | Syft or the configured matcher is not at its configured path, or is not a regular file |
+| `tool_checksum_mismatch` | `config` | false | the tool's SHA-256 differs from the configuration (checked before every run) |
+| `tool_failed` | `internal` | true | a tool exited with an error, wrote more than 256 MiB, or wrote output that is not its documented JSON |
+| `tool_timeout` | `timeout` | true | the scan passed its timeout (configuration, lowered by `deadline_seconds`) |
+| `matcher_db_unavailable` | `config` | false | the matcher has no local vulnerability database, or it is older than allowed, and may not download one |
+| `target_unreadable` | `permission` | false | the target is missing, not a directory (host, directory), or not an OCI or docker image archive |
+
+`stage` of a package failure is one of `target`, `tool`, `inventory`, `matching`, `output`,
+`run`. A source id that names no packages target is `source_not_found`, as for the other
+job types.
 
 `error_kind` is stored next to the text as the platform's `error_kind`; failures the
 platform makes itself (`agent_timeout`, `agent_revoked`) have `error_kind` `platform`.
+
+### 6.7 Result of `scan_packages` (parts of kind `packages`, revision 3)
+
+The agent runs Syft for the inventory and Grype or Trivy for the matches, as child
+processes on the agent's server (section 6.7.1). Each item of a `packages` part is one
+package (keys in this order):
+```json
+{"name":"openssl","version":"3.0.13-0ubuntu3.4","ecosystem":"Ubuntu","ecosystem_release":"24.04","purl":"pkg:deb/ubuntu/openssl@3.0.13-0ubuntu3.4?arch=amd64&distro=ubuntu-24.04","type":"os_package","layer":"os","dependency":"unknown","licenses":["Apache-2.0"],"matches":[{"id":"CVE-2024-5535","aliases":[],"severity":"medium","cvss":[{"version":"3.1","vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H","score_tenths":91}],"fix_versions":["3.0.13-0ubuntu3.5"],"matcher":"grype"}]}
+```
+
+| Key | Rule |
+|---|---|
+| `name` | 1 to 255 characters (*label* characters). In the form the ecosystem's advisories use: Maven `groupId:artifactId`, npm `@scope/name`, Packagist `vendor/name`, Go the module path, otherwise as reported. The platform normalises case (contract 8.2). |
+| `version` | 1 to 128 characters, as reported |
+| `ecosystem` | `npm`, `Packagist`, `Go`, `Maven`, `PyPI`, `NuGet`, `RubyGems`, `crates.io`, `Debian`, `Ubuntu`, `Alpine`, `Red Hat`, `Rocky Linux`, `AlmaLinux`, `other` |
+| `ecosystem_release` | absent, or 1 to 32 characters: the distribution release of an OS package (`24.04`, `12`, `3.20.3`, `9.4`) |
+| `purl` | absent, or 1 to 512 characters |
+| `type` | `library`, `os_package`, `application`, `framework`, `container`, `firmware`, `other` |
+| `layer` | `os` (OS packages), `runtime` (frameworks, platforms and language runtimes such as node, php, python, openjdk), `application` |
+| `dependency` | `direct`, `transitive`, `unknown` (phase 1 agents send `unknown`) |
+| `licenses` | at most 10 strings of 1 to 64 characters (SPDX id, name or expression); `[]` when none |
+| `matches` | at most 200; `[]` when none or when the job had `match: false` |
+| match `id` | `^[A-Za-z0-9._:-]{3,64}$` (CVE, GHSA, distribution advisory, ...) |
+| match `aliases` | at most 20 ids of the same pattern, without `id` itself |
+| match `severity` | `critical`, `high`, `medium`, `low`, `negligible`, `unknown` |
+| match `cvss` | at most 8 entries `{"version","vector","score_tenths"}`: `version` `d.d` (`2.0`, `3.0`, `3.1`, `4.0`), `vector` 1 to 200 printable ASCII characters, `score_tenths` an **integer** 0 to 100 (the base score × 10; no floats on the wire) |
+| match `fix_versions` | at most 10 strings of 1 to 128 characters |
+| match `matcher` | `grype` or `trivy` |
+
+The agent sends every key except `ecosystem_release` and `purl`, which it leaves out when
+unknown. The platforms treat a wrong-typed field as absent (clarification C precedent) and
+skip and count an item without a valid `name`, `version` or `ecosystem`. One package is one
+item: copies found in several places (two `node_modules` folders) are merged by
+(`ecosystem`, `name`, `version`), and their matches by `id`. Items with matches come first;
+an agent never sends more than 20 000 items per job, and no more than fit into 500 parts.
+
+Result (`complete.result`, at most 64 KiB, keys in this order):
+```json
+{"target_kind":"host","target_label":"Web 01","os":{"id":"ubuntu","version":"24.04"},"inventory_tool":"syft","inventory_tool_version":"1.55.0","matcher":"grype","matcher_version":"0.121.0","matcher_db_built_at":"2026-11-01T04:12:30Z","packages_total":1834,"matches_total":42,"truncated":false,"duration_ms":91234,"bridge_version":"0.3.0","sbom_sha256":"<64 hex>"}
+```
+- `target_kind` the target's kind; `target_label` its label.
+- `os` `{"id","version"}` of the scanned system or image, or `null`.
+- `inventory_tool` is `syft`; `inventory_tool_version` its version (`unknown` when Syft did
+  not report one).
+- `matcher` `grype`, `trivy` or `none`; with `none`, `matcher_version` and
+  `matcher_db_built_at` are `null`. Otherwise `matcher_version` is the version
+  (`unknown` when not reported) and `matcher_db_built_at` the build time of the matcher's
+  vulnerability database (UTC, `Z`), or `null` when the matcher did not report one.
+- `packages_total` distinct packages found; `matches_total` matches in the items sent.
+- `truncated` true when not everything found was sent: more packages than 20 000 (or the
+  agent's lower `max_packages`), more than fit into 500 parts, more than 200 matches for a
+  package, or a package, match or match field outside the rules above.
+- `sbom_sha256` the SHA-256 of the CycloneDX SBOM Syft produced (the SBOM itself never
+  leaves the agent's server).
+
+`bridge_jobs.result` keeps exactly these keys. The platform stores at most 20 000 items per
+job; parts beyond are ignored and the job is stored with `truncated` true.
+
+#### 6.7.1 How the agent scans (normative for the agent, informative for the platforms)
+
+- Tools are executables the operator installs: Syft (inventory) and Grype or Trivy
+  (matching). Each one is pinned by absolute path and SHA-256 in `packages.tools`; the
+  agent verifies the checksum before every run and never downloads a tool.
+- Child processes run without a shell and with fixed argument lists:
+  `syft scan dir:<path> -o cyclonedx-json [--exclude ./<rel>/** …]` (host, directory),
+  `syft scan oci-archive:<file> -o cyclonedx-json` or `docker-archive:<file>` (image
+  archive), `grype sbom:<sbom> -o json`, `trivy sbom <sbom> --format json [--skip-db-update]`
+  and `trivy version --format json`. Standard output goes to a private file capped at
+  256 MiB; standard error is kept locally (last 64 KiB) only to tell a database problem
+  from another failure, and is never sent.
+- The environment is emptied: `HOME` and `TMPDIR` point below the agent's state directory,
+  plus `SYFT_CHECK_FOR_APP_UPDATE=false` (and Syft's remote licence and Maven lookups
+  switched off), `GRYPE_CHECK_FOR_APP_UPDATE=false`, `GRYPE_DB_CACHE_DIR`,
+  `GRYPE_DB_AUTO_UPDATE`, `GRYPE_DB_UPDATE_URL` (when set), `GRYPE_DB_MAX_ALLOWED_BUILT_AGE`,
+  `GRYPE_DB_VALIDATE_AGE=true`, `TRIVY_CACHE_DIR`, `TRIVY_DB_REPOSITORY` (when set) and
+  Trivy's version check off. On Windows `USERPROFILE`, `TEMP`, `TMP` and `SystemRoot` are
+  added so a program can start.
+- Tools run at the lowest CPU and I/O priority (nice 19 and the idle I/O class on Linux,
+  the idle priority class on Windows) with the scan timeout (default 30 minutes).
+- Read only: targets are only read; tools write only below the agent's state directory
+  (the matcher databases must be configured inside it). Nothing is scanned over the
+  network; the matcher may download its own vulnerability database only when the operator
+  allows it (`db_auto_update`, or Trivy without `skip_db_update`), from the configured
+  source or mirror.
+- One package scan runs at a time per agent; a job that arrives while a scan of its target
+  runs waits for it and uses its report.
 
 ## 7. Persisting results
 
@@ -537,6 +702,15 @@ most findings first, ties by id>,"files_stored":<n>,"scanned_at":<now>}` (empty 
 maps stay `{}` when stored and when returned, section 2),
 `pii_alert_count` = `files_with_pii`, `pdp_alert_count` = the number of files whose
 `pdp_category` is `spesifik`, `scanning_status = done`, `last_scanned_at = now`.
+
+**`scan_packages`** (revision 3): defined in the DSPM phase 1 contract (contract
+`dspm-fase1.md` section 7.4): the parts are streamed one at a time (section 5.6) and applied
+as a full inventory of the asset named by `bridge_jobs.sec_asset_id` for source `agent`
+(components absent from the scan get `removed_at`), then the external matches of the items,
+the platform's own matching, priorities, and `sec_assets.os_name`, `os_version`,
+`last_inventory_at` and `last_inventory_source`. `bridge_jobs.result` keeps the result of
+section 6.7. Both lines add explicit `scan_packages` arms to their part-kind, item, result
+and persist switches (no default arm falls into another job type's path).
 
 ## 8. Tenant API (both frontends)
 
@@ -647,6 +821,14 @@ non-empty string, or when its type is `file_share`. For them:
 | `BRIDGE_SOURCE_NOT_ON_AGENT` | Sumber ini tidak ada di inventaris agen bridge. | `bridge_source_key` is not in the agent's inventory |
 | `BRIDGE_SOURCE_MISMATCH` | Jenis sumber di agen bridge tidak cocok dengan jenis sistem. | the entry's kind or engine does not fit the system type, or the type cannot use an agent (checked after the inventory lookup) |
 
+- An inventory entry of kind `packages` (revision 3) fits no system type: linking a system
+  to it answers `BRIDGE_SOURCE_MISMATCH`. Packages entries are used by security posture
+  assets instead (`POST /api/security/dspm/assets` with `bridge_agent_id` and
+  `bridge_source_key`), and a scan is requested with `POST /api/security/dspm/assets/{id}/scan`:
+  `202 {"data":{"job_id","status":"queued"}}`; an agent without `job:scan_packages` in its
+  capabilities answers `409 {"message":"Agen bridge belum mendukung pindai paket. Perbarui agen dan aktifkan scan_packages.","code":"AGENT_CAPABILITY_MISSING"}`,
+  a scan already `queued` or `leased` for the asset `409 {"message":"Pindai aset ini sedang berjalan.","code":"SCAN_ALREADY_RUNNING"}`
+  (the full access rules, including `POSTURE_NOT_ENTITLED`, are in the DSPM contract).
 - New `source_type` **`file_share`** (category `unstructured`): valid only with
   `bridge_agent_id` + `bridge_source_key` of a `files` source. It is not the retired
   `file` type and has no path field.
@@ -681,7 +863,10 @@ line's rules for tenant and landlord tables, with tenant-isolation tests in both
   varchar(40) null, `error_kind` varchar(40) null, `error_code` varchar(60) null,
   `result` json null (the result without parts), `parts` int, `created_by` null,
   `queued_at`, `leased_at` null, `finished_at` null, timestamps. Index (`agent_id`,
-  `status`, `queued_at`).
+  `status`, `queued_at`). Revision 3 adds `sec_asset_id` uuid null (the security posture
+  asset of a `scan_packages` job; `information_system_id` is then null) with the index
+  `bridge_jobs_sec_asset_idx` (`sec_asset_id`, `status`). `bridge_agent_sources.kind` also
+  takes `packages` (engine `host`, `directory` or `image_archive`).
 - `bridge_job_parts`: `id` uuid, `org_id`, `job_id`, `seq` int, `kind`, `body` (longtext
   / text), `sha256` char(64), `created_at`; unique (`job_id`, `seq`).
 
@@ -694,6 +879,10 @@ line's rules for tenant and landlord tables, with tenant-isolation tests in both
 - `privasimu:scan-scheduled-systems` (Laravel) and its Go twin: a system linked to an
   agent gets a `scan_database` or `scan_files` job instead of a direct scan; no new job
   while one is `queued` or `leased` for the same system.
+- Revision 3: `security:scan-agent-assets` daily at 02:15 queues `scan_packages` for
+  security posture assets of entitled organisations whose agent has `job:scan_packages`
+  and whose scan frequency is due; no new job while one is `queued` or `leased` for the
+  same asset.
 
 ## 11. Limits
 
@@ -713,6 +902,10 @@ line's rules for tenant and landlord tables, with tenant-isolation tests in both
 | previous agent token after rotation | 600 s |
 | bridge poll interval | `next_poll_seconds` within `poll_min` (≥ 1 s) and `poll_max` (≤ 5 min) |
 | stored file findings per scan | 5000 |
+| `scan_packages` items per job | 20 000 (the agent sends at most 200 items and 512 KiB of items per part) |
+| `scan_packages` matches per item | 200 |
+| `scan_packages` `deadline_seconds` | at most 3600 |
+| agent tool output | 256 MiB per tool run (the agent's own limit) |
 
 ## 12. Test plan for the platform implementations
 
@@ -739,6 +932,18 @@ another tenant is `404 job_not_found`), and `tenant.readonly` returning
 - `Source.id` equals the inventory id; the jobs lookup answers `{"data":[]}` for a foreign
   or malformed id, filters `active`, and returns at most 5 newest first;
 - empty count maps come back as `{}`.
+
+Since revision 3 also:
+
+- `/poll` answers end with `"platform_features":["source_kind:packages","job:scan_packages"]`;
+- an inventory with kind `packages` is accepted (engines `host`, `directory`,
+  `image_archive`); a `packages` part is refused for any job type but `scan_packages`, and
+  `tables`/`files` parts for `scan_packages`;
+- `scan_packages` is refused (`409 AGENT_CAPABILITY_MISSING`) for an agent whose
+  capabilities lack `job:scan_packages`;
+- streaming persist of 20 000 items within the memory limit; the result key whitelist;
+  `score_tenths` as an integer; the six new failure texts;
+- an agent of revision 2 (no packages kind, no capability) behaves exactly as before.
 
 The agent in this repository runs the same flows against an in-memory platform
 (`internal/agent/fakeplatform_test.go`) that follows this document, including the field
@@ -773,6 +978,25 @@ revocation); both lines then settled these points, and the bridge followed:
 8. A job the platform leases again after expiring its lease (section 6.1) is restarted by
    the bridge under the new lease; before, a bridge still running the old lease ignored
    the new one and the job failed with `agent_timeout`.
+
+**Revision 3, 2 November 2026** (security posture per RoPA, phase 1; contract
+`dspm-fase1.md` section 7). Additive and negotiated, protocol 1 and `X-Bridge-Protocol: 1`
+unchanged, `errors.json` unchanged:
+
+1. *Platform features*: `/poll` answers end with `platform_features` (section 5.2); a
+   revision 2 platform sends none and gets nothing of revision 3.
+2. *Opt-in capability*: the agent announces `job:scan_packages` only when the operator
+   allowed `scan_packages`; the platform queues the job only for such agents.
+3. *Inventory kind `packages`* with engines `host`, `directory`, `image_archive` and the
+   capabilities `matcher:*` and `os:<id>` (section 5.3), sent only after the platform
+   listed `source_kind:packages`.
+4. *Job `scan_packages`*, option `match` appended to the options order (section 6.2); part
+   kind `packages`; item and result of section 6.7 with integer CVSS `score_tenths`.
+5. *Streaming persist*: parts are decoded and applied one at a time (sections 5.6 and 7).
+6. *Failure codes* `tool_missing`, `tool_checksum_mismatch`, `tool_failed`, `tool_timeout`,
+   `matcher_db_unavailable`, `target_unreadable` with their texts, kinds and retry rule
+   (section 6.6).
+7. *Data model*: `bridge_jobs.sec_asset_id` (section 9).
 
 **Open items** (not normative yet):
 
