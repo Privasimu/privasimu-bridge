@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,10 +17,16 @@ func TestReferenceExampleIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The example uses a Unix path for the file root; on Windows only the root check differs.
+	// The example uses Unix paths; on Windows only the checks of absolute paths differ.
 	if err := c.Validate(); err != nil {
-		if ve, ok := err.(*ValidationError); !ok || len(ve.Problems) != 1 || filepath.Separator != '\\' {
+		ve, ok := err.(*ValidationError)
+		if !ok || filepath.Separator != '\\' {
 			t.Fatal(err)
+		}
+		for _, p := range ve.Problems {
+			if !strings.Contains(p, ".path") && !strings.Contains(p, ".exclude[") {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := c.ValidateServer(); err != nil {
@@ -30,5 +37,8 @@ func TestReferenceExampleIsValid(t *testing.T) {
 	}
 	if len(c.Sources) != 5 || c.Sources[1].Engine != "mysql" || c.Sources[0].Match.Host != "corebank" {
 		t.Fatalf("%+v", c.Sources)
+	}
+	if len(c.Packages.Targets) != 3 || c.Packages.Tools.Matcher != MatcherGrype || c.Packages.Targets[2].Kind != PackageImageArchive {
+		t.Fatalf("%+v", c.Packages)
 	}
 }

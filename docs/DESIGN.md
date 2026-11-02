@@ -293,11 +293,26 @@ and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and an ext
 for an on-premise platform. Its inventory always carries a label (the id
 when none is configured) and never more than the platforms accept.
 
+**Package scans (revision 3, security posture per RoPA).** The opt-in job `scan_packages`
+(`internal/packages`) lists the software of an allow-listed target (an installed host, a
+directory, or a local OCI or docker image archive) with Syft and matches it with Grype or
+Trivy. The scanners are operator-installed executables pinned by path and SHA-256 and
+verified before every run; they run as child processes without a shell, with fixed
+arguments, an emptied environment, a timeout, a 256 MiB output cap and the lowest CPU and
+I/O priority, and write only below the state directory. Nothing is scanned over the
+network; the matcher downloads its vulnerability database only when the operator allows it.
+Only package names, versions, ecosystems, licences and vulnerability ids (with CVSS as
+integer tenths and fixed versions) leave; paths, file names and the SBOM stay on the
+server. Negotiation keeps old and new agents and platforms compatible: the agent announces
+`job:scan_packages` only when allowed, and sends packages targets only to a platform whose
+poll answer lists `source_kind:packages` (AGENT-PROTOCOL.md sections 5.2, 5.3, 6.7).
+
 ## 7. Data minimisation
 
 | Leaves the network | Never leaves |
 |---|---|
 | table, collection and column names; data types; nullability; row estimates (mode B) | row values, samples, documents |
+| package names, versions, ecosystems, licences, vulnerability ids, CVSS, fixed versions, OS id and version (`scan_packages`) | file paths, file names, package locations, the SBOM, scanner output and errors |
 | PII category codes, UU PDP category (`umum` / `spesifik`), confidence, detection source | the matched values or any part of them |
 | counts: sampled values, matching values, per-category counts per file | file content, extracted text |
 | protection state of a column (plaintext, masked, encrypted, mixed) from local sampling | keys, ciphertext, masked strings |
@@ -473,6 +488,11 @@ service come only from the platform's tests and are marked as such.
   available); they exist behind the `integration` build tag with fixtures for all five
   engines. Linux-only paths (symbolic links, systemd install) were compiled and vetted on
   Windows, not executed.
+- Package scans were tested with fake scanners only (the test binary standing in for Syft,
+  Grype and Trivy with recorded outputs); the real tools run in the opt-in
+  `integration` test. The Linux priority and exclusion paths were vetted, not executed, on
+  Windows. Release signing is wired (minisign, cosign) but the owner has not generated the
+  keys yet: `release-keys/` holds placeholders and releases are unsigned until then.
 - Db2 and Db2 for i are not supported (no pure-Go driver); Snowflake is a cloud service
   the platform can scan directly.
 - Scanned PDFs and images (OCR), legacy Office formats, encrypted documents and archives

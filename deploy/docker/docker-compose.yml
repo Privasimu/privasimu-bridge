@@ -8,6 +8,7 @@
 #   docker compose run --rm bridge secret set corebank_pg     (reads the value from stdin)
 # Then put the certificate in config/tls/, edit config/bridge.yaml and start:
 #   docker compose up -d bridge          (mode A)    or    docker compose up -d agent (mode B)
+#   (or agent-scan: mode B with package scans; build it with: make image-scan)
 
 x-hardening: &hardening
   image: privasimu-bridge:0.1.0
@@ -36,6 +37,23 @@ services:
   agent:
     <<: *hardening
     command: ["agent"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/privasimu-bridge", "healthcheck", "--mode", "agent"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # Mode B with package scans (scan_packages): the -scan image adds pinned Syft and Grype
+  # at /opt/privasimu-bridge/tools. To scan the host itself, mount its root read-only and
+  # use a packages target {kind: host, path: /host}; image archives can be mounted as files.
+  agent-scan:
+    <<: *hardening
+    image: privasimu-bridge:0.1.0-scan
+    command: ["agent"]
+    volumes:
+      - ./config:/etc/privasimu-bridge:ro
+      - bridge-state:/var/lib/privasimu-bridge
+      - /:/host:ro                              # optional: host scan, read-only
     healthcheck:
       test: ["CMD", "/usr/local/bin/privasimu-bridge", "healthcheck", "--mode", "agent"]
       interval: 60s

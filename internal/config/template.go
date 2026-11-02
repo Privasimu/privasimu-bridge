@@ -71,6 +71,10 @@ var comments = map[string][2]string{
 		"hashed: report a keyed hash per file (default). relative: report the path in the root.",
 		"hashed: laporkan hash berkunci per berkas (bawaan). relative: laporkan path di dalam root.",
 	},
+	"packages": {
+		"Software inventory and vulnerability matching (job scan_packages; add it to\n# agent.allowed_jobs to allow it). Install Syft and Grype or Trivy yourself and pin each\n# by path and SHA-256 (sha256sum <file>); the bridge never downloads them.",
+		"Inventaris perangkat lunak dan pencocokan kerentanan (tugas scan_packages; tambahkan ke\n# agent.allowed_jobs untuk mengizinkannya). Pasang sendiri Syft dan Grype atau Trivy, lalu\n# kunci masing-masing dengan path dan SHA-256 (sha256sum <berkas>); bridge tidak pernah mengunduhnya.",
+	},
 	"sampling": {
 		"Local sampling reads a few values per column ON THIS SERVER to confirm personal data.\n  # Only counts and categories leave; values are never sent, stored or logged.",
 		"Sampling lokal membaca beberapa nilai per kolom DI SERVER INI untuk memastikan data\n  # pribadi. Hanya jumlah dan kategori yang keluar; nilai tidak pernah dikirim, disimpan, atau dicatat.",
@@ -137,6 +141,19 @@ files:
 #      label: "HR share"
 #      path: "/srv/shares/hr"
 #      exclude: ["**/~$*", "**/.git/**"]
+
+# {{c "packages"}}
+packages:
+  targets: []
+#    - id: web-01
+#      label: "Web 01"
+#      kind: host                # host | directory | image_archive
+#      path: /
+#      refresh_interval: 24h
+#  tools:
+#    syft: {path: /opt/privasimu-bridge/tools/syft, sha256: "<sha256>"}
+#    matcher: grype            # grype | trivy | none
+#    grype: {path: /opt/privasimu-bridge/tools/grype, sha256: "<sha256>"}
 
 detection:
   # {{c "sampling"}}

@@ -1,0 +1,34 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-11-02T01:05:00Z",
+  "ArtifactName": "/srv/placeholder-work/sbom.cdx.json",
+  "ArtifactType": "cyclonedx",
+  "Metadata": {"OS": {"Family": "ubuntu", "Name": "24.04"}},
+  "Results": [
+    {
+      "Target": "/srv/placeholder-work/sbom.cdx.json (ubuntu 24.04)", "Class": "os-pkgs", "Type": "ubuntu",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-5535", "VendorIDs": ["USN-6937-1"], "PkgName": "openssl",
+          "PkgIdentifier": {"PURL": "pkg:deb/ubuntu/openssl@3.0.13-0ubuntu3.4?arch=amd64&distro=ubuntu-24.04"},
+          "InstalledVersion": "3.0.13-0ubuntu3.4", "FixedVersion": "3.0.13-0ubuntu3.5, 3.1.0", "Severity": "MEDIUM",
+          "CVSS": {
+            "redhat": {"V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N", "V3Score": 3.7},
+            "nvd": {"V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H", "V3Score": 9.1}
+          }
+        }
+      ]
+    },
+    {
+      "Target": "Node.js", "Class": "lang-pkgs", "Type": "node-pkg",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2021-23337", "PkgName": "lodash", "InstalledVersion": "4.17.20", "FixedVersion": "4.17.21",
+          "Severity": "HIGH", "PkgIdentifier": {"PURL": "pkg:npm/lodash@4.17.20"},
+          "CVSS": {"ghsa": {"V3Vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H", "V3Score": 7.2}}
+        }
+      ]
+    },
+    {"Target": "Python", "Class": "lang-pkgs", "Type": "python-pkg"}
+  ]
+}

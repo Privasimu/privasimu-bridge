@@ -76,7 +76,8 @@ func validText(s string, min, max int) bool {
 	return n >= min && n <= max
 }
 
-// MaxInventory is the most sources plus file roots the platform accepts in one inventory.
+// MaxInventory is the most sources, file roots and packages targets the platform accepts
+// in one inventory.
 const MaxInventory = 200
 
 // Validate checks the parts every command uses: sources, file roots, detection, language.
@@ -108,8 +109,9 @@ func (c *Config) Validate() error {
 			seen(fmt.Sprintf("files.roots[%d]", i), r.ID)
 		}
 	}
+	c.validatePackages(&p, seen)
 	validateSampling(&p, "detection.sampling", &c.Detection.Sampling)
-	if n := len(c.Sources) + len(c.Files.Roots); n > MaxInventory {
+	if n := len(c.Sources) + len(c.Files.Roots) + len(c.Packages.Targets); n > MaxInventory {
 		p.add("config.inventory_size", n, MaxInventory)
 	}
 	return p.err()
@@ -333,7 +335,7 @@ func (c *Config) ValidateAgent() error {
 		}
 	}
 	for _, j := range a.AllowedJobs {
-		if j != JobTestSource && j != JobScanDatabase && j != JobScanFiles {
+		if j != JobTestSource && j != JobScanDatabase && j != JobScanFiles && j != JobScanPackages {
 			p.add("config.job", j)
 		}
 	}

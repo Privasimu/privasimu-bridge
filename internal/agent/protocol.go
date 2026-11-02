@@ -31,6 +31,18 @@ const (
 	JobTestSource   = "test_source"
 	JobScanDatabase = "scan_database"
 	JobScanFiles    = "scan_files"
+	// JobScanPackages inventories a packages target and matches it against vulnerability
+	// data (revision 3; opt-in through agent.allowed_jobs).
+	JobScanPackages = "scan_packages"
+)
+
+// Platform features a poll answer may list in platform_features (revision 3). A platform
+// that lists none (an older one) gets nothing of revision 3 from the agent.
+const (
+	// FeatureSourceKindPackages: the platform accepts inventory entries of kind packages.
+	FeatureSourceKindPackages = "source_kind:packages"
+	// FeatureJobScanPackages: the platform can queue scan_packages jobs.
+	FeatureJobScanPackages = "job:scan_packages"
 )
 
 // Error codes the platform returns in {"error": {"code": ...}}. The status and the exact
@@ -83,6 +95,14 @@ const (
 	FailInvalidOptions   = "invalid_options"
 	FailDatabasePrefix   = "database_" // + dbsource kind: database_auth, database_unreachable, ...
 	FailFilesRootMissing = "file_root_missing"
+
+	// Package scans (revision 3).
+	FailToolMissing      = "tool_missing"
+	FailToolChecksum     = "tool_checksum_mismatch"
+	FailToolFailed       = "tool_failed"
+	FailToolTimeout      = "tool_timeout"
+	FailMatcherDB        = "matcher_db_unavailable"
+	FailTargetUnreadable = "target_unreadable"
 )
 
 // ErrorBody is the error envelope of the platform.
@@ -136,6 +156,19 @@ type PollResponse struct {
 	InventoryRequested     bool      `json:"inventory_requested"`
 	TokenRotationRequested bool      `json:"token_rotation_requested"`
 	ServerTime             time.Time `json:"server_time"`
+	// PlatformFeatures lists what the platform supports beyond revision 2 (revision 3:
+	// source_kind:packages, job:scan_packages). Absent from older platforms.
+	PlatformFeatures []string `json:"platform_features"`
+}
+
+// HasFeature reports whether the answer lists a platform feature.
+func (r PollResponse) HasFeature(f string) bool {
+	for _, x := range r.PlatformFeatures {
+		if x == f {
+			return true
+		}
+	}
+	return false
 }
 
 // Job is one unit of work. Options only narrow what the local configuration allows.
@@ -166,13 +199,16 @@ type JobOptions struct {
 	// MaxAgeSeconds is sent.
 	Refresh       bool `json:"refresh,omitempty"`
 	MaxAgeSeconds int  `json:"max_age_seconds,omitempty"`
+	// Match false makes a package scan send the inventory without running the matcher;
+	// true or absent runs the configured matcher.
+	Match *bool `json:"match,omitempty"`
 }
 
 // Source is one entry of the inventory the agent reports. It names what the agent may
 // scan; it never carries a host, a path or a credential.
 type Source struct {
 	ID           string   `json:"id"`
-	Kind         string   `json:"kind"` // database | files
+	Kind         string   `json:"kind"` // database | files | packages
 	Engine       string   `json:"engine"`
 	Label        string   `json:"label"`
 	Description  string   `json:"description,omitempty"`
@@ -206,8 +242,9 @@ type ProgressResponse struct {
 
 // Part kinds.
 const (
-	PartTables = "tables"
-	PartFiles  = "files"
+	PartTables   = "tables"
+	PartFiles    = "files"
+	PartPackages = "packages"
 )
 
 // PartRequest uploads one slice of a result. Parts are numbered from 0; sending the

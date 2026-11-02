@@ -17,6 +17,7 @@ import (
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/i18n"
+	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 )
 
@@ -70,6 +71,7 @@ func (a *app) cmdCheck(args []string) error {
 	}
 	if *only == "" {
 		c.checkRoots(cfg)
+		c.checkPackages(cfg)
 		if len(cfg.Server.APIKeys) > 0 {
 			c.checkServer(cfg)
 		}
@@ -159,6 +161,45 @@ func (c *checker) checkRoots(cfg *config.Config) {
 			continue
 		}
 		c.ok("cli.check.root_ok", rc.ID, root.Path, len(entries), rc.ReportPaths)
+	}
+}
+
+// checkPackages verifies the package scanners (present, regular files, pinned checksum),
+// the matcher database and every packages target.
+func (c *checker) checkPackages(cfg *config.Config) {
+	if len(cfg.Packages.Targets) == 0 {
+		return
+	}
+	if !cfg.Agent.JobAllowed(config.JobScanPackages) {
+		c.warn("cli.check.pkg_job_off")
+	}
+	tools := packages.Tools(cfg)
+	for _, name := range []string{"syft", "grype", "trivy"} {
+		t, ok := tools[name]
+		if !ok {
+			continue
+		}
+		if err := packages.VerifyTool(t); err != nil {
+			c.fail("cli.check.tool_"+packages.ToolProblem(err), name, t.Path)
+			continue
+		}
+		c.ok("cli.check.tool_ok", name, t.Path)
+		if packages.WritableByOthers(t.Path) {
+			c.warn("cli.check.tool_writable", name, t.Path)
+		}
+	}
+	if cfg.Packages.Tools.Matcher == config.MatcherNone {
+		c.warn("cli.check.matcher_none")
+	} else if !packages.MatcherDatabaseReady(cfg) {
+		c.warn("cli.check.matcher_db_missing", cfg.Packages.Tools.Matcher)
+	}
+	for i := range cfg.Packages.Targets {
+		t := &cfg.Packages.Targets[i]
+		if err := packages.CheckTarget(t); err != nil {
+			c.fail("cli.check.target_failed", t.ID, t.Path, err.Error())
+			continue
+		}
+		c.ok("cli.check.target_ok", t.ID, t.Kind, t.Path)
 	}
 }
 

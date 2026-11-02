@@ -156,6 +156,13 @@ func (a *app) cmdService(args []string) error {
 	for _, r := range cfg.Files.Roots {
 		spec.ReadOnlyPaths = append(spec.ReadOnlyPaths, r.Path)
 	}
+	// Package targets are read-only like file roots. A host target at "/" needs no entry:
+	// the unit already makes the whole system read-only (ProtectSystem=strict).
+	for _, t := range cfg.Packages.Targets {
+		if p := filepath.Clean(t.Path); filepath.Dir(p) != p {
+			spec.ReadOnlyPaths = append(spec.ReadOnlyPaths, p)
+		}
+	}
 	if _, port, err := net.SplitHostPort(cfg.Server.Listen); err == nil && *mode == "serve" {
 		if p, _ := strconv.Atoi(port); p > 0 && p < 1024 {
 			spec.BindPrivileged = true

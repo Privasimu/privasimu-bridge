@@ -21,6 +21,7 @@ import (
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/files"
+	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 	"github.com/privasimu/bridge/internal/testutil/fakedb"
 )
@@ -135,7 +136,14 @@ func (e *env) enroll() {
 
 func (e *env) agent() *Agent {
 	e.t.Helper()
-	a, err := New(Deps{Config: e.cfg, Client: e.client, Resolver: e.resolver, Files: e.files, Log: testLogger(),
+	var pk *packages.Service
+	if len(e.cfg.Packages.Targets) > 0 {
+		var err error
+		if pk, err = packages.NewService(e.cfg, testLogger(), nil); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	a, err := New(Deps{Config: e.cfg, Client: e.client, Resolver: e.resolver, Files: e.files, Packages: pk, Log: testLogger(),
 		Open: e.db.Opener()})
 	if err != nil {
 		e.t.Fatal(err)
@@ -637,10 +645,10 @@ func TestInventoryWithoutLabelsOrSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Sources[0].Label = ""
-	if list, _ := Inventory(cfg, nil); len(list) != 1 || list[0].Label != "crm" {
+	if list, _ := Inventory(cfg, nil, nil, false); len(list) != 1 || list[0].Label != "crm" {
 		t.Fatalf("%+v", list)
 	}
-	empty, digest := Inventory(&config.Config{}, nil)
+	empty, digest := Inventory(&config.Config{}, nil, nil, true)
 	raw, _ := json.Marshal(SourcesRequest{SourcesDigest: digest, Sources: empty})
 	if !bytes.Contains(raw, []byte(`"sources":[]`)) {
 		t.Fatalf("%s", raw)
@@ -743,7 +751,7 @@ func TestPlatformTextRule(t *testing.T) {
 		"a\xffb":                 false,
 	}
 	for label, ok := range labels {
-		if got := validInventory(inventory(label, nil, false)); got != ok {
+		if got := validInventory(inventory(label, nil, false), false); got != ok {
 			t.Errorf("label %q: accepted %t, want %t", label, got, ok)
 		}
 	}
@@ -752,11 +760,11 @@ func TestPlatformTextRule(t *testing.T) {
 		ok    bool
 	}{{nil, true}, {"", true}, {strings.Repeat("x", 512), true}, {strings.Repeat("x", 513), false}, {"a\u0001", false}, {7, false}}
 	for _, d := range descriptions {
-		if got := validInventory(inventory("CRM", d.value, true)); got != d.ok {
+		if got := validInventory(inventory("CRM", d.value, true), false); got != d.ok {
 			t.Errorf("description %v: accepted %t, want %t", d.value, got, d.ok)
 		}
 	}
-	if validInventory(map[string]any{"sources_digest": "sha256:" + strings.Repeat("0", 64), "sources": nil}) {
+	if validInventory(map[string]any{"sources_digest": "sha256:" + strings.Repeat("0", 64), "sources": nil}, true) {
 		t.Error(`"sources": null must be refused`)
 	}
 }

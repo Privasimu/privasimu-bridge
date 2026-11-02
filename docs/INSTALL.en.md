@@ -46,12 +46,28 @@ Client or ODBC driver.
 ## 1. Install the program
 
 The release has one file per platform: `privasimu-bridge-<version>-linux-amd64`,
-`...-linux-arm64`, `...-windows-amd64.exe`, and `SHA256SUMS`.
+`...-linux-arm64`, `...-windows-amd64.exe`, `SHA256SUMS` and `SHA256SUMS.sig`.
+
+**Verify the download first.** `SHA256SUMS` is signed with minisign
+(<https://jedisct1.github.io/minisign/>); the public key is `release-keys/minisign.pub` in
+the bridge repository and is also published with every release. Compare its key line with
+the one below before you trust it:
+
+```text
+Release public key (minisign): NOT PUBLISHED YET. The release keys have not been
+generated; until the owner publishes them here, releases are unsigned and only the
+checksums below can be checked.
+```
+
+```sh
+minisign -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub   # must print "Signature and comment signature verified"
+```
 
 ### Linux
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing                # verify the download
+minisign -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub   # signature (see above)
+sha256sum -c SHA256SUMS --ignore-missing                # checksums
 sudo install -m 0755 privasimu-bridge-0.1.0-linux-amd64 /usr/local/bin/privasimu-bridge
 privasimu-bridge version
 ```
@@ -59,6 +75,7 @@ privasimu-bridge version
 ### Windows (PowerShell as Administrator)
 
 ```powershell
+minisign.exe -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub              # signature (see above)
 Get-FileHash .\privasimu-bridge-0.1.0-windows-amd64.exe -Algorithm SHA256   # compare with SHA256SUMS
 New-Item -ItemType Directory -Force "C:\Program Files\PrivasimuBridge" | Out-Null
 Copy-Item .\privasimu-bridge-0.1.0-windows-amd64.exe "C:\Program Files\PrivasimuBridge\privasimu-bridge.exe"
@@ -74,6 +91,10 @@ See `deploy/docker/docker-compose.yml`. The image runs as a non-root user with a
 read-only file system; mount the configuration at `/etc/privasimu-bridge` and a volume at
 `/var/lib/privasimu-bridge`. Run `init` once with
 `--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`.
+For package scans (section 11.1) use `privasimu-bridge:<version>-scan`, which adds pinned
+Syft and Grype. Images are signed with cosign; verify before you run one:
+`cosign verify --key cosign.pub privasimu-bridge:<version>-scan` (`cosign.pub` from
+`release-keys/` of the bridge repository).
 
 Every command prints English by default; add `--lang id` (or set
 `PRIVASIMU_BRIDGE_LANG=id`) for Indonesian.
@@ -445,6 +466,69 @@ The agent opens no port; allow outbound HTTPS to Privasimu only.
 - **Revocation**: a revoked agent stops its running jobs and logs "this agent was
   revoked". To reconnect, create a new agent in Privasimu and enroll with its token.
 
+### 11.1 Package scans (security posture)
+
+The job `scan_packages` lists the software installed on a system and the vulnerabilities
+known for it, for the security posture per RoPA in Privasimu. It is **off** until you
+allow it, and Privasimu shows it only to organisations with that module.
+
+1. **Install the scanners yourself.** Syft (inventory) and Grype or Trivy (matching) from
+   their official releases, or use the image `privasimu-bridge:<version>-scan`, which has
+   Syft and Grype at `/opt/privasimu-bridge/tools/` (their SHA-256 values are in
+   `/opt/privasimu-bridge/tools/SHA256SUMS`). The bridge never downloads a tool.
+   ```sh
+   sudo install -o root -g root -m 0755 syft grype /opt/privasimu-bridge/tools/
+   sha256sum /opt/privasimu-bridge/tools/syft /opt/privasimu-bridge/tools/grype
+   ```
+2. **Configure** targets and tools in `bridge.yaml` (every option is in
+   `examples/bridge.example.yaml`), and add `scan_packages` to `agent.allowed_jobs`:
+   ```yaml
+   agent:
+     allowed_jobs: [test_source, scan_database, scan_files, scan_packages]
+   packages:
+     targets:
+       - id: web-01
+         label: "Web 01"
+         kind: host                 # host | directory | image_archive
+         path: /
+         refresh_interval: 24h
+     tools:
+       syft:  {path: /opt/privasimu-bridge/tools/syft,  sha256: "<sha256 of syft>"}
+       matcher: grype
+       grype: {path: /opt/privasimu-bridge/tools/grype, sha256: "<sha256 of grype>"}
+   ```
+   - `host` reads an installed system (OS packages from the dpkg, rpm or apk database, and
+     language packages it finds); `/proc`, `/sys`, `/dev`, `/run` and the bridge's own
+     folders are never read. The service account reads only what it may read: OS package
+     databases are world-readable, application folders may need read access
+     (`setfacl -R -m u:privasimu-bridge:rX /srv/app`).
+   - `directory` reads one application or deployment folder.
+   - `image_archive` reads a container image saved as a file (`docker save -o app.tar
+     app:1.4.2`, or an OCI archive); the bridge uses no Docker socket and pulls nothing.
+3. **Vulnerability database.** The matcher needs its own database, kept inside
+   `state_dir`. Either let Grype download it (`db_auto_update: true`; outbound HTTPS to
+   Anchore's database host, or to a mirror in your network with `db_update_url`), or
+   keep updates off and update it yourself, for example
+   `sudo -u privasimu-bridge env GRYPE_DB_CACHE_DIR=/var/lib/privasimu-bridge/grype-db /opt/privasimu-bridge/tools/grype db update`
+   on a schedule (or `grype db import <file>` on an air-gapped server). A database older
+   than `db_max_age` (default 120h) is refused; the job then fails with
+   `matcher_db_unavailable`. Trivy: `cache_dir`, `db_repository` (mirror) and
+   `skip_db_update` work the same way.
+4. **Check and restart**: `sudo privasimu-bridge check` verifies each tool against its
+   SHA-256, the database and each target; then restart the agent service. In Privasimu,
+   open **Security Posture → Inventory**, add an asset linked to the agent's packages target
+   and click **Scan now**.
+
+How it runs: the tools are checked against their SHA-256 before every run, started without
+a shell with fixed arguments and an empty environment, at the lowest CPU and I/O priority,
+with a 30-minute timeout (`packages.timeout`) and a 256 MiB output limit. One package scan
+runs at a time. Only package names, versions, licences and vulnerability ids are sent;
+paths, files and the SBOM stay on the server. Failures appear in Privasimu as codes:
+`tool_missing`, `tool_checksum_mismatch` (fix the path or the `sha256`), `tool_failed`,
+`tool_timeout`, `matcher_db_unavailable` (update the database), `target_unreadable`
+(path or permissions). The systemd unit made by `service install` adds every target
+outside `/` as a read-only path.
+
 ## 12. Troubleshooting
 
 First run `privasimu-bridge check`, then look at the bridge log and the audit log
@@ -480,7 +564,10 @@ curl -sS https://bridge.example.co.id:8443/v1/name-database-tabels \
 - **Rotate the API key**: `key create`, update the key in Privasimu, then
   `key revoke <old id>` and restart the service.
 - **Certificate renewal**: replace the files; the bridge reloads them within a minute.
-- **Upgrade**: replace the binary, run `check`, restart the service.
+- **Upgrade**: verify the new release (section 1), replace the binary, run `check`,
+  restart the service.
+- **Package scanners**: after updating Syft, Grype or Trivy, put the new SHA-256 in
+  `packages.tools` and run `check`; until then scans fail with `tool_checksum_mismatch`.
 - **Backup**: `bridge.yaml`, `secrets.key` and `secrets.enc` together. On Windows the key
   is sealed to the machine: after moving to a new server, store the secrets again with
   `secret set`.

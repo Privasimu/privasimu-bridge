@@ -13,7 +13,10 @@ counts and confidence**. Values, samples and file content never leave.
 
 Databases: PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, Oracle, MongoDB (pure-Go
 drivers; no Oracle Instant Client or ODBC). Files: TXT, CSV, JSON and other text, DOCX,
-XLSX, PDF text. Indonesian identifiers are validated locally (NIK, KK, NPWP, BPJS,
+XLSX, PDF text. Software (mode B, opt-in): installed packages of a host, a directory or a
+local container image archive, with Syft, matched against vulnerability data with Grype or
+Trivy, for the security posture per RoPA; only package names, versions, licences and
+vulnerability ids leave. Indonesian identifiers are validated locally (NIK, KK, NPWP, BPJS,
 +62/08 phone numbers, payment cards with Luhn, and more).
 
 ## Works with both Privasimu Nexus lines (Laravel and Go)
@@ -36,6 +39,22 @@ Privasimu Nexus has two backend lines that stay in sync: the **Laravel line**
 file it needs no PHP, Composer, web server, PHP-FPM or database extensions (`oci8` with
 Instant Client, `sqlsrv` with the ODBC driver, ...); its Oracle and SQL Server drivers
 are pure Go. The same binary runs as a Windows service, a systemd unit or a container.
+
+## Verify the download
+
+Releases are signed (see [docs/RELEASE-SIGNING.md](docs/RELEASE-SIGNING.md)): `SHA256SUMS`
+with minisign, the container images with cosign. With the release files and the public
+keys from [`release-keys/`](release-keys/) in one folder:
+
+```sh
+minisign -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub   # signature of the checksums
+sha256sum -c SHA256SUMS --ignore-missing                    # checksums of the binaries
+cosign verify --key cosign.pub privasimu-bridge:<version>-scan   # an image
+```
+
+(`scripts/release/verify.sh <folder>` runs the first two.) The release keys have not been
+generated yet: `release-keys/` holds clearly marked placeholders until the owner publishes
+the real public keys, and the scripts refuse to sign or verify with a placeholder.
 
 ## Quick start (mode A)
 
@@ -77,11 +96,12 @@ Details and the threat model: [docs/DESIGN.md](docs/DESIGN.md).
 | `cmd/privasimu-bridge` | the binary |
 | `internal/` | detection, database access, file scanning, mode A server, mode B agent, CLI |
 | `docs/DESIGN.md` | architecture, threat model, both modes, platform work list, comparison checklist |
-| `docs/AGENT-PROTOCOL.md`, `docs/agent-protocol/errors.json` | the mode B platform contract |
+| `docs/AGENT-PROTOCOL.md`, `docs/agent-protocol/errors.json` | the mode B platform contract (revision 3: package scans) |
+| `docs/RELEASE-SIGNING.md`, `release-keys/`, `scripts/release/` | release signing (minisign, cosign) and verification |
 | `docs/INSTALL.en.md`, `docs/INSTALL.id.md` | installation tutorials |
 | `examples/bridge.example.yaml` | every configuration option, commented |
 | `deploy/` | systemd unit, Docker Compose, nginx examples |
-| `Dockerfile`, `Makefile` | container image, release builds |
+| `Dockerfile`, `Dockerfile.scan`, `Makefile` | container images (default, and `-scan` with pinned Syft and Grype), release builds |
 | `THIRD_PARTY_NOTICES.md` | linked modules and licences |
 
 ## Development
@@ -103,5 +123,7 @@ The command line speaks English and Indonesian (`--lang id` or
 
 0.1.0-dev. Mode A is complete and tested against both platform clients. Mode B and file
 scanning are implemented in both platform lines (agent protocol revision 2; see
-[docs/DESIGN.md](docs/DESIGN.md) section 12 for the frontend work). Database integration
+[docs/DESIGN.md](docs/DESIGN.md) section 12 for the frontend work). Package scans
+(`scan_packages`, agent protocol revision 3) are implemented in the agent and tested with
+fake scanners; the platform side is in progress in both lines. Database integration
 tests have not been run against live databases yet.

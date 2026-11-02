@@ -10,7 +10,11 @@ package agent
 //     a poll authenticated with the previous token answers token_rotation_requested: true
 //     (the agent lost the answer of its last rotation);
 //   - revocation keeps the token hashes, so a revoked agent gets 401 agent_revoked, and
-//     the organisation check after authentication answers 403 forbidden.
+//     the organisation check after authentication answers 403 forbidden;
+//   - revision 3: with features set, the poll answer lists platform_features and the
+//     inventory accepts kind packages; without (an older platform) the answer has no such
+//     key and an inventory with kind packages is refused as a whole. Parts must have the
+//     kind of their job type, package items and results follow section 6.7.
 //
 // It records every request body to check that nothing but metadata leaves the agent.
 
@@ -82,6 +86,9 @@ type fakePlatform struct {
 	rotateRequested    bool
 	protocolHeaderSeen bool
 	refusedAuth        int
+	// features is the platform_features list of poll answers; nil = an older platform that
+	// sends no such key and refuses inventory entries of kind packages.
+	features []string
 	// invalid counts requests answered 400 invalid_request.
 	invalid atomic.Int32
 }
@@ -140,12 +147,19 @@ func (f *fakePlatform) issue() string {
 	return "pvba_placeholder-token-" + strconv.Itoa(f.issued)
 }
 
-// protocolErrors is docs/agent-protocol/errors.json: the normative status and message of
-// every error code, shared with the platform implementations.
-var protocolErrors = func() map[string]struct {
+// protocolError is the normative status and message of one error code.
+type protocolError struct {
 	Status  int
 	Message string
-} {
+}
+
+// protocolErrors is docs/agent-protocol/errors.json: the normative status and message of
+// every error code, shared with the platform implementations. TestMain loads it (not a
+// package initialiser, which would also run when the test binary acts as a fake tool in
+// another working directory).
+var protocolErrors map[string]protocolError
+
+func loadProtocolErrors() map[string]protocolError {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "agent-protocol", "errors.json"))
 	if err != nil {
 		panic(err)
@@ -160,18 +174,12 @@ var protocolErrors = func() map[string]struct {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		panic(err)
 	}
-	out := map[string]struct {
-		Status  int
-		Message string
-	}{}
+	out := map[string]protocolError{}
 	for _, e := range doc.Errors {
-		out[e.Code] = struct {
-			Status  int
-			Message string
-		}{e.Status, e.Message}
+		out[e.Code] = protocolError{e.Status, e.Message}
 	}
 	return out
-}()
+}
 
 // canonical encodes a response the way docs/AGENT-PROTOCOL.md requires: compact, keys in
 // declaration order, no HTML escaping, no trailing newline.
@@ -331,13 +339,33 @@ func (f *fakePlatform) poll(w http.ResponseWriter, body []byte, token string, pr
 	// As both platform lines: also while the agent still uses its previous token, because
 	// then the answer of its last rotation was lost.
 	rot := f.rotateRequested || previous
+	features := f.features
 	f.mu.Unlock()
-	reply(w, 200, PollResponse{Jobs: jobs, NextPollSeconds: 1, InventoryRequested: inv, TokenRotationRequested: rot, ServerTime: time.Now().UTC()})
+	if features == nil {
+		// An older platform: the answer of revision 2, without platform_features.
+		reply(w, 200, struct {
+			Jobs                   []Job     `json:"jobs"`
+			NextPollSeconds        int       `json:"next_poll_seconds"`
+			InventoryRequested     bool      `json:"inventory_requested"`
+			TokenRotationRequested bool      `json:"token_rotation_requested"`
+			ServerTime             time.Time `json:"server_time"`
+		}{jobs, 1, inv, rot, time.Now().UTC()})
+		return
+	}
+	reply(w, 200, PollResponse{Jobs: jobs, NextPollSeconds: 1, InventoryRequested: inv, TokenRotationRequested: rot,
+		ServerTime: time.Now().UTC(), PlatformFeatures: features})
+}
+
+// packagesKind reports whether this platform accepts inventory entries of kind packages.
+func (f *fakePlatform) packagesKind() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.features, FeatureSourceKindPackages)
 }
 
 func (f *fakePlatform) putSources(w http.ResponseWriter, body []byte) {
 	m, ok := object(body)
-	if !ok || !validInventory(m) {
+	if !ok || !validInventory(m, f.packagesKind()) {
 		f.refuse(w, ErrInvalidRequest)
 		return
 	}
@@ -379,7 +407,13 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 	id, action, _ := strings.Cut(rest, "/")
 	// Step 8 (the body) comes before step 9 (the job and its lease).
 	m, ok := object(body)
-	if !ok || !validJobBody(action, m) {
+	f.mu.Lock()
+	jobType := ""
+	if j := f.jobs[id]; j != nil {
+		jobType = j.job.Type
+	}
+	f.mu.Unlock()
+	if !ok || !validJobBody(action, m) || !validForJob(jobType, action, m) {
 		if action == "progress" || action == "parts" || action == "complete" || action == "fail" {
 			f.refuse(w, ErrInvalidRequest)
 		} else {
@@ -476,6 +510,7 @@ var (
 var sourceEngines = map[string][]string{
 	"database": {"postgresql", "mysql", "mssql", "oracle", "mongodb"},
 	"files":    {"filesystem"},
+	"packages": {"host", "directory", "image_archive"},
 }
 
 // object decodes a request body that must be one JSON object; numbers stay json.Number.
@@ -546,8 +581,9 @@ func agentInfoError(m map[string]any) string {
 	return ""
 }
 
-// validInventory checks a PUT /sources body (section 5.3).
-func validInventory(m map[string]any) bool {
+// validInventory checks a PUT /sources body (section 5.3). packagesKind is whether the
+// platform implements revision 3; an older one refuses the whole inventory on kind packages.
+func validInventory(m map[string]any, packagesKind bool) bool {
 	sources, isList := m["sources"].([]any)
 	if !word(m["sources_digest"], reDigest) || !isList || len(sources) > 200 {
 		return false
@@ -561,7 +597,8 @@ func validInventory(m map[string]any) bool {
 		id, _ := s["id"].(string)
 		kind, _ := s["kind"].(string)
 		engine, _ := s["engine"].(string)
-		if !reID.MatchString(id) || seen[id] || !slices.Contains(sourceEngines[kind], engine) || !text(s["label"], 1, 128) {
+		if !reID.MatchString(id) || seen[id] || !slices.Contains(sourceEngines[kind], engine) || !text(s["label"], 1, 128) ||
+			(kind == "packages" && !packagesKind) {
 			return false
 		}
 		seen[id] = true
@@ -584,7 +621,7 @@ func validJobBody(action string, m map[string]any) bool {
 	case "parts":
 		kind, _ := m["kind"].(string)
 		items, isList := m["items"].([]any)
-		return integer(m["seq"], 0, 499) && (kind == PartTables || kind == PartFiles) && isList && len(items) >= 1 && len(items) <= 1000
+		return integer(m["seq"], 0, 499) && (kind == PartTables || kind == PartFiles || kind == PartPackages) && isList && len(items) >= 1 && len(items) <= 1000
 	case "complete":
 		_, isObject := m["result"].(map[string]any)
 		return integer(m["parts"], 0, 500) && isObject
@@ -593,6 +630,133 @@ func validJobBody(action string, m map[string]any) bool {
 		return word(m["error_kind"], reWord) && word(m["error_code"], reErrorCode) && isBool && word(m["stage"], reWord)
 	}
 	return false
+}
+
+// partKinds is the part kind of each job type (section 5.5).
+var partKinds = map[string]string{JobScanDatabase: PartTables, JobScanFiles: PartFiles, JobScanPackages: PartPackages}
+
+// validForJob checks what depends on the job type: the part kind, package items and the
+// result of scan_packages (section 6.7).
+func validForJob(jobType, action string, m map[string]any) bool {
+	switch action {
+	case "parts":
+		if m["kind"] != partKinds[jobType] {
+			return false
+		}
+		if jobType == JobScanPackages {
+			for _, it := range m["items"].([]any) {
+				if item, ok := it.(map[string]any); !ok || !validPackageItem(item) {
+					return false
+				}
+			}
+		}
+	case "complete":
+		if jobType == JobScanPackages {
+			return validPackagesResult(m["result"].(map[string]any))
+		}
+	}
+	return true
+}
+
+var (
+	reMatchID      = regexp.MustCompile(`^[A-Za-z0-9._:-]{3,64}$`)
+	reSHA256       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	ecosystems     = []string{"npm", "Packagist", "Go", "Maven", "PyPI", "NuGet", "RubyGems", "crates.io", "Debian", "Ubuntu", "Alpine", "Red Hat", "Rocky Linux", "AlmaLinux", "other"}
+	componentTypes = []string{"library", "os_package", "application", "framework", "container", "firmware", "other"}
+	severities     = []string{"critical", "high", "medium", "low", "negligible", "unknown"}
+)
+
+func oneOf(v any, list []string) bool {
+	s, ok := v.(string)
+	return ok && slices.Contains(list, s)
+}
+
+// keysExactly checks that an object has exactly the required keys, plus optional ones.
+func keysExactly(m map[string]any, required []string, optional ...string) bool {
+	for _, k := range required {
+		if _, ok := m[k]; !ok {
+			return false
+		}
+	}
+	for k := range m {
+		if !slices.Contains(required, k) && !slices.Contains(optional, k) {
+			return false
+		}
+	}
+	return true
+}
+
+// validPackageItem is the item rule of section 6.7.
+func validPackageItem(it map[string]any) bool {
+	if !keysExactly(it, []string{"name", "version", "ecosystem", "type", "layer", "dependency", "licenses", "matches"}, "ecosystem_release", "purl") ||
+		!text(it["name"], 1, 255) || !text(it["version"], 1, 128) || !oneOf(it["ecosystem"], ecosystems) ||
+		!oneOf(it["type"], componentTypes) || !oneOf(it["layer"], []string{"os", "runtime", "application"}) ||
+		!oneOf(it["dependency"], []string{"direct", "transitive", "unknown"}) ||
+		!stringList(it["licenses"], 10, func(s string) bool { return text(s, 1, 64) }) {
+		return false
+	}
+	if r, ok := it["ecosystem_release"]; ok && !text(r, 1, 32) {
+		return false
+	}
+	if p, ok := it["purl"]; ok && !text(p, 1, 512) {
+		return false
+	}
+	matches, ok := it["matches"].([]any)
+	if !ok || len(matches) > 200 {
+		return false
+	}
+	for _, x := range matches {
+		m, ok := x.(map[string]any)
+		if !ok || !keysExactly(m, []string{"id", "aliases", "severity", "cvss", "fix_versions", "matcher"}) ||
+			!word(m["id"], reMatchID) || !stringList(m["aliases"], 20, reMatchID.MatchString) || !oneOf(m["severity"], severities) ||
+			!stringList(m["fix_versions"], 10, func(s string) bool { return text(s, 1, 128) }) || !oneOf(m["matcher"], []string{"grype", "trivy"}) {
+			return false
+		}
+		cvss, ok := m["cvss"].([]any)
+		if !ok {
+			return false
+		}
+		for _, c := range cvss {
+			cm, ok := c.(map[string]any)
+			if !ok || !keysExactly(cm, []string{"version", "vector", "score_tenths"}) || !text(cm["version"], 3, 3) || !text(cm["vector"], 1, 200) {
+				return false
+			}
+			// score_tenths is an integer from 0 to 100: a float on the wire is refused.
+			n, isNumber := cm["score_tenths"].(json.Number)
+			if !isNumber || strings.ContainsAny(string(n), ".eE") || !integer(n, 0, 100) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validPackagesResult checks complete.result of scan_packages: exactly the keys of
+// section 6.7, nothing more.
+func validPackagesResult(r map[string]any) bool {
+	if !keysExactly(r, []string{"target_kind", "target_label", "os", "inventory_tool", "inventory_tool_version", "matcher",
+		"matcher_version", "matcher_db_built_at", "packages_total", "matches_total", "truncated", "duration_ms", "bridge_version", "sbom_sha256"}) {
+		return false
+	}
+	if !oneOf(r["target_kind"], []string{"host", "directory", "image_archive"}) || !text(r["target_label"], 1, 128) ||
+		r["inventory_tool"] != "syft" || !oneOf(r["matcher"], []string{"grype", "trivy", "none"}) ||
+		!integer(r["packages_total"], 0, 1<<40) || !integer(r["matches_total"], 0, 1<<40) || !integer(r["duration_ms"], 0, 1<<40) ||
+		!word(r["sbom_sha256"], reSHA256) {
+		return false
+	}
+	if _, ok := r["truncated"].(bool); !ok {
+		return false
+	}
+	if r["matcher"] == "none" && (r["matcher_version"] != nil || r["matcher_db_built_at"] != nil) {
+		return false
+	}
+	if o := r["os"]; o != nil {
+		om, ok := o.(map[string]any)
+		if !ok || !keysExactly(om, []string{"id", "version"}) {
+			return false
+		}
+	}
+	return true
 }
 
 // allBodies joins every request body received.
