@@ -47,12 +47,28 @@ Instant Client, maupun driver ODBC.
 ## 1. Pasang programnya
 
 Setiap rilis berisi satu berkas per platform: `privasimu-bridge-<versi>-linux-amd64`,
-`...-linux-arm64`, `...-windows-amd64.exe`, dan `SHA256SUMS`.
+`...-linux-arm64`, `...-windows-amd64.exe`, `SHA256SUMS`, dan `SHA256SUMS.sig`.
+
+**Periksa unduhan terlebih dahulu.** `SHA256SUMS` ditandatangani dengan minisign
+(<https://jedisct1.github.io/minisign/>); kunci publiknya adalah `release-keys/minisign.pub`
+di repositori bridge dan juga diterbitkan bersama setiap rilis. Cocokkan baris kuncinya
+dengan yang di bawah sebelum mempercayainya:
+
+```text
+Kunci publik rilis (minisign): BELUM DITERBITKAN. Kunci rilis belum dibuat; sampai
+pemilik menerbitkannya di sini, rilis belum ditandatangani dan hanya checksum di bawah
+yang dapat diperiksa.
+```
+
+```sh
+minisign -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub   # harus mencetak "Signature and comment signature verified"
+```
 
 ### Linux
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing                # periksa unduhan
+minisign -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub   # tanda tangan (lihat di atas)
+sha256sum -c SHA256SUMS --ignore-missing                # checksum
 sudo install -m 0755 privasimu-bridge-0.1.0-linux-amd64 /usr/local/bin/privasimu-bridge
 privasimu-bridge version
 ```
@@ -60,6 +76,7 @@ privasimu-bridge version
 ### Windows (PowerShell sebagai Administrator)
 
 ```powershell
+minisign.exe -Vm SHA256SUMS -x SHA256SUMS.sig -p minisign.pub              # tanda tangan (lihat di atas)
 Get-FileHash .\privasimu-bridge-0.1.0-windows-amd64.exe -Algorithm SHA256   # cocokkan dengan SHA256SUMS
 New-Item -ItemType Directory -Force "C:\Program Files\PrivasimuBridge" | Out-Null
 Copy-Item .\privasimu-bridge-0.1.0-windows-amd64.exe "C:\Program Files\PrivasimuBridge\privasimu-bridge.exe"
@@ -75,6 +92,10 @@ Lihat `deploy/docker/docker-compose.yml`. Image berjalan sebagai pengguna non-ro
 sistem berkas hanya-baca; pasang konfigurasi di `/etc/privasimu-bridge` dan sebuah volume
 di `/var/lib/privasimu-bridge`. Jalankan `init` sekali dengan
 `--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`.
+Untuk pindai paket (bagian 11.1) pakai `privasimu-bridge:<versi>-scan`, yang menambahkan
+Syft dan Grype dengan versi terkunci. Image ditandatangani dengan cosign; periksa sebelum
+menjalankannya: `cosign verify --key cosign.pub privasimu-bridge:<versi>-scan`
+(`cosign.pub` dari `release-keys/` di repositori bridge).
 
 Pesan program berbahasa Inggris secara bawaan; tambahkan `--lang id` (atau atur
 `PRIVASIMU_BRIDGE_LANG=id`) untuk bahasa Indonesia.
@@ -455,6 +476,71 @@ Agen tidak membuka port; cukup izinkan HTTPS keluar ke Privasimu.
   "this agent was revoked" di log. Untuk menyambung lagi, buat agen baru di Privasimu lalu
   daftarkan dengan tokennya.
 
+### 11.1 Pindai paket (postur keamanan)
+
+Tugas `scan_packages` mendata perangkat lunak yang terpasang di sebuah sistem beserta
+kerentanan yang diketahui untuknya, untuk postur keamanan per RoPA di Privasimu. Tugas ini
+**mati** sampai Anda mengizinkannya, dan Privasimu hanya menampilkannya kepada organisasi
+yang memiliki modul tersebut.
+
+1. **Pasang sendiri alat pindainya.** Syft (inventaris) dan Grype atau Trivy (pencocokan)
+   dari rilis resminya, atau pakai image `privasimu-bridge:<versi>-scan` yang sudah berisi
+   Syft dan Grype di `/opt/privasimu-bridge/tools/` (nilai SHA-256 keduanya ada di
+   `/opt/privasimu-bridge/tools/SHA256SUMS`). Bridge tidak pernah mengunduh alat.
+   ```sh
+   sudo install -o root -g root -m 0755 syft grype /opt/privasimu-bridge/tools/
+   sha256sum /opt/privasimu-bridge/tools/syft /opt/privasimu-bridge/tools/grype
+   ```
+2. **Atur** target dan alat di `bridge.yaml` (semua opsi ada di
+   `examples/bridge.example.yaml`), lalu tambahkan `scan_packages` ke `agent.allowed_jobs`:
+   ```yaml
+   agent:
+     allowed_jobs: [test_source, scan_database, scan_files, scan_packages]
+   packages:
+     targets:
+       - id: web-01
+         label: "Web 01"
+         kind: host                 # host | directory | image_archive
+         path: /
+         refresh_interval: 24h
+     tools:
+       syft:  {path: /opt/privasimu-bridge/tools/syft,  sha256: "<sha256 syft>"}
+       matcher: grype
+       grype: {path: /opt/privasimu-bridge/tools/grype, sha256: "<sha256 grype>"}
+   ```
+   - `host` membaca sistem yang terpasang (paket OS dari basis data dpkg, rpm, atau apk,
+     dan paket bahasa pemrograman yang ditemukan); `/proc`, `/sys`, `/dev`, `/run`, dan
+     folder milik bridge sendiri tidak pernah dibaca. Akun layanan hanya membaca yang boleh
+     ia baca: basis data paket OS dapat dibaca semua pengguna, folder aplikasi mungkin perlu
+     izin baca (`setfacl -R -m u:privasimu-bridge:rX /srv/app`).
+   - `directory` membaca satu folder aplikasi atau deployment.
+   - `image_archive` membaca image container yang disimpan sebagai berkas (`docker save -o
+     app.tar app:1.4.2`, atau arsip OCI); bridge tidak memakai socket Docker dan tidak
+     menarik apa pun.
+3. **Basis data kerentanan.** Matcher memerlukan basis datanya sendiri, yang disimpan di
+   dalam `state_dir`. Biarkan Grype mengunduhnya (`db_auto_update: true`; HTTPS keluar ke
+   host basis data Anchore, atau ke mirror di jaringan Anda dengan `db_update_url`), atau
+   biarkan pembaruan mati dan perbarui sendiri, misalnya
+   `sudo -u privasimu-bridge env GRYPE_DB_CACHE_DIR=/var/lib/privasimu-bridge/grype-db /opt/privasimu-bridge/tools/grype db update`
+   secara terjadwal (atau `grype db import <berkas>` di server tanpa internet). Basis data
+   yang lebih tua dari `db_max_age` (bawaan 120h) ditolak; tugas lalu gagal dengan
+   `matcher_db_unavailable`. Untuk Trivy, `cache_dir`, `db_repository` (mirror), dan
+   `skip_db_update` bekerja dengan cara yang sama.
+4. **Periksa dan restart**: `sudo privasimu-bridge --lang id check` memeriksa setiap alat
+   terhadap SHA-256-nya, basis data, dan setiap target; lalu restart layanan agen. Di
+   Privasimu buka **Postur Keamanan → Inventaris**, tambahkan aset yang ditautkan ke target
+   paket agen, lalu klik **Pindai sekarang**.
+
+Cara kerjanya: setiap alat dicocokkan dengan SHA-256-nya sebelum setiap kali dijalankan,
+dijalankan tanpa shell dengan argumen tetap dan lingkungan kosong, pada prioritas CPU dan
+I/O terendah, dengan batas waktu 30 menit (`packages.timeout`) dan batas keluaran 256 MiB.
+Hanya satu pindai paket yang berjalan pada satu waktu. Yang dikirim hanya nama paket,
+versi, lisensi, dan id kerentanan; path, berkas, dan SBOM tetap di server. Kegagalan tampil
+di Privasimu sebagai kode: `tool_missing`, `tool_checksum_mismatch` (perbaiki path atau
+`sha256`), `tool_failed`, `tool_timeout`, `matcher_db_unavailable` (perbarui basis data),
+`target_unreadable` (path atau izin). Unit systemd buatan `service install` menambahkan
+setiap target di luar `/` sebagai path hanya-baca.
+
 ## 12. Pemecahan masalah
 
 Pertama jalankan `privasimu-bridge --lang id check`, lalu lihat log bridge dan log audit
@@ -491,7 +577,11 @@ curl -sS https://bridge.contoh.co.id:8443/v1/name-database-tabels \
 - **Ganti kunci API**: `key create`, perbarui kunci di Privasimu, lalu
   `key revoke <id lama>` dan restart layanan.
 - **Perpanjangan sertifikat**: ganti berkasnya; bridge memuat ulang dalam satu menit.
-- **Pembaruan program**: ganti berkas program, jalankan `check`, restart layanan.
+- **Pembaruan program**: periksa rilis baru (bagian 1), ganti berkas program, jalankan
+  `check`, restart layanan.
+- **Alat pindai paket**: setelah memperbarui Syft, Grype, atau Trivy, isikan SHA-256 yang
+  baru di `packages.tools` lalu jalankan `check`; sampai saat itu pindai gagal dengan
+  `tool_checksum_mismatch`.
 - **Cadangan**: `bridge.yaml`, `secrets.key`, dan `secrets.enc` bersama-sama. Di Windows
   kuncinya disegel ke mesin itu: setelah pindah ke server baru, simpan ulang rahasianya
   dengan `secret set`.
