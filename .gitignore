@@ -14,6 +14,13 @@ coverage.*
 *.local.yaml
 secrets.enc
 secrets.key
+# Release signing: only the public keys in release-keys/ belong here (docs/RELEASE-SIGNING.md)
+cosign.key
+minisign.key
+*.minisign.key
+release-keys/*
+!release-keys/minisign.pub
+!release-keys/cosign.pub
 *.pem
 *.key
 *.crt

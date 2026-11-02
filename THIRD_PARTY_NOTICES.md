@@ -27,7 +27,7 @@ module sources (`go mod download`, then the `LICENSE` file of each module).
 | go.yaml.in/yaml/v3 | v3.0.5 | MIT and Apache-2.0 | configuration file |
 | golang.org/x/crypto | v0.58.0 | BSD-3-Clause | driver dependency |
 | golang.org/x/sync | v0.24.0 | BSD-3-Clause | driver dependency |
-| golang.org/x/sys | v0.49.0 | BSD-3-Clause | Windows service, DPAPI |
+| golang.org/x/sys | v0.49.0 | BSD-3-Clause | Windows service, DPAPI, child process priority |
 | golang.org/x/term | v0.47.0 | BSD-3-Clause | password prompt without echo |
 | golang.org/x/text | v0.43.0 | BSD-3-Clause | driver dependency |
 
@@ -37,6 +37,21 @@ the driver's own source files available under MPL-2.0 (they are public at
 https://github.com/go-sql-driver/mysql). If the driver is ever modified, the modified
 files must be published under MPL-2.0. No module source is copied into this repository;
 modules are fetched by `go mod download` and checked against `go.sum`.
+
+## Programs in the `-scan` image
+
+The bridge never links or downloads a package scanner. The optional
+`privasimu-bridge:<version>-scan` image (`Dockerfile.scan`) ships two unmodified programs
+next to the bridge, run as separate processes for the job `scan_packages`:
+
+| Program | Version | Licence | Source |
+|---|---|---|---|
+| Syft | 1.55.0 | Apache-2.0 | https://github.com/anchore/syft |
+| Grype | 0.121.0 | Apache-2.0 | https://github.com/anchore/grype |
+
+Their licence and notice files are in the release archives they are taken from. Trivy
+(Apache-2.0, https://github.com/aquasecurity/trivy) is supported as a matcher when the
+operator installs it; it is not shipped.
 
 Security status at the same date: `govulncheck ./...` reports no vulnerability reachable
 from the code. It lists one module-level advisory, GO-2026-5932 (the unmaintained

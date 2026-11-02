@@ -1,0 +1,4 @@
+PLACEHOLDER - NOT A REAL KEY.
+The owner replaces this file with the cosign public key (cosign.pub from
+"cosign generate-key-pair"), a PEM block that starts with "-----BEGIN PUBLIC KEY-----".
+See docs/RELEASE-SIGNING.md.
