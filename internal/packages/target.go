@@ -97,8 +97,9 @@ func archiveScheme(file string) (string, error) {
 	return "", errNotAnImage
 }
 
-// mandatoryExcludes are never read on a host scan: virtual and runtime filesystems.
-var mandatoryExcludes = []string{"/proc", "/sys", "/dev", "/run"}
+// mandatoryExcludes are never read on a host scan: virtual and runtime filesystems, below
+// the target's root (a host mounted at /host in a container keeps them at /host/proc).
+var mandatoryExcludes = []string{"proc", "sys", "dev", "run"}
 
 // excludeGlobs turns a target's exclusions into Syft --exclude patterns, which are
 // relative to the scanned directory ("./proc/**"). Absolute paths outside the target are
@@ -107,7 +108,9 @@ func excludeGlobs(t *config.PackageTarget, own []string) []string {
 	root := filepath.Clean(t.Path)
 	var paths []string
 	if t.Kind == config.PackageHost && runtime.GOOS != "windows" {
-		paths = append(paths, mandatoryExcludes...)
+		for _, d := range mandatoryExcludes {
+			paths = append(paths, filepath.Join(root, d))
+		}
 	}
 	paths = append(paths, t.Exclude...)
 	paths = append(paths, own...)

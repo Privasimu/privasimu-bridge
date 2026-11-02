@@ -537,6 +537,11 @@ func TestExcludeGlobs(t *testing.T) {
 		if got := excludeGlobs(host, nil); !slices.Contains(got, "./proc/**") || !slices.Contains(got, "./sys/**") {
 			t.Fatalf("%v", got)
 		}
+		// A host mounted below another root keeps its virtual filesystems excluded.
+		mounted := &config.PackageTarget{Kind: config.PackageHost, Path: "/host", Exclude: []string{"/proc"}}
+		if got := excludeGlobs(mounted, nil); !slices.Contains(got, "./proc/**") || !slices.Contains(got, "./run/**") || len(got) != 8 {
+			t.Fatalf("%v", got)
+		}
 	}
 }
 
