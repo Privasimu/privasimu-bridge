@@ -157,7 +157,7 @@ bridge ↔ file shares; bridge ↔ local operator.
 | A hostile database server | MySQL `LOAD DATA LOCAL INFILE` refused, no clear-text passwords, response sizes bounded by the drivers | Driver bugs |
 | Malicious files on a share (links out of the root, junctions, zip bombs, hostile PDFs, FIFOs) | Roots from local configuration only; `os.Root`; links, junctions and special files skipped; non-blocking open and a regular-file re-check; zip sizes checked unsigned and bounded; PDF parsed in a child process with an empty environment and a hard timeout | A parser bug inside the child |
 | Secrets on the bridge host | No secret in `bridge.yaml` (literal passwords are a configuration error); encrypted store (AES-256-GCM), key file 0600 or DPAPI machine scope on Windows; secrets printed as `[redacted]` | An administrator or root on the host can read secrets: the store protects copies and backups, not a compromised host |
-| Text sent to the optional language model (`detection.nlp`) | Off by default; only to an endpoint the operator configures, whose every address must be loopback or private (checked and pinned at each connection, no proxy, no redirect); bounded text per request, timeouts, bounded concurrency; only counts kept | The model service sees the text it examines: it must be the client's own, on the bridge server or its internal network |
+| Text sent to the optional language model (`detection.nlp`) | Off by default; only to an endpoint the operator configures: plain `http://` to loopback only, `https://` to loopback or private addresses (`100.64.0.0/10` only with `allow_cgnat`; cloud metadata addresses never), checked and pinned at each connection, no proxy, no redirect; bounded text per request, timeouts, bounded concurrency; only counts kept | The model service sees the text it examines: it must be the client's own, on the bridge server or its internal network |
 | Data in logs | The audit log has typed fields only; resolved secrets redact themselves; sampling errors never show driver messages (they can quote values) | Local operational logs can name hosts and databases (for troubleshooting, on the server) |
 | Supply chain | Few dependencies with versions pinned in go.sum, `govulncheck` clean, `gosec` clean, base images pinned by digest, no cgo | — |
 
@@ -404,10 +404,13 @@ A literal password in the file is a validation error that never echoes the value
   dates and places of birth, gender, religion, marital status, nationality, health,
   biometrics, genetics, criminal records, financial data, driving licences, employee ids,
   user names, IP addresses, vehicle plates, mothers' maiden names), so a validated
-  identifier is never counted twice. Every connection is checked against loopback and
-  private ranges and pinned to the checked address, without proxy or redirect; requests
-  have a timeout and bounded concurrency; after a failure the service is left alone for a
-  minute and the bridge uses its patterns and validators only. `check` tests the service.
+  identifier is never counted twice. Every connection is checked and pinned to the checked
+  address, without proxy or redirect: a plain `http://` endpoint may reach loopback only (text
+  never crosses the network unencrypted), an `https://` one loopback and private ranges; the
+  shared address space `100.64.0.0/10` only with `allow_cgnat`, and cloud metadata addresses
+  (`169.254.0.0/16`, `100.100.100.200`, `fd00:ec2::254`) never. Requests have a timeout and
+  bounded concurrency; after a failure the service is left alone for a minute and the
+  bridge uses its patterns and validators only. `check` tests the service.
 
 ## 11. Operations
 
@@ -559,15 +562,23 @@ caller names, credentials in every request) is what the bridge leaves out by des
 - ClickHouse was tested against a fake of its HTTP interface only (no ClickHouse server
   runs on Windows); the Redshift dialect ran against PostgreSQL 16 (same protocol and
   catalog tables), not against Redshift. Redshift reports no row estimates (`pg_class`
-  counts are not maintained there). The engines after MongoDB are offered in mode B only
-  once a platform lists them (revision 4 is a proposal; neither platform line implements it
-  yet); Snowflake also works in mode A, which the platform already sends.
+  counts are not maintained there). Their defaults stay compatible but are not safe on an
+  untrusted network: ClickHouse without a TLS mode speaks plain HTTP (the password travels
+  in the `X-ClickHouse-Key` header) and Redshift's `prefer` does not verify the certificate;
+  `check` warns about both and the guide recommends `verify-full`. The engines after
+  MongoDB are offered in mode B only once a platform lists them (revision 4 is a proposal;
+  neither platform line implements it yet); Snowflake also works in mode A, which the
+  platform already sends.
 - Snowflake, BigQuery, Databricks and Athena were tested against fakes of their REST APIs
   (key-pair JWTs verified, AWS Signature Version 4 checked against the AWS reference
   example), not against the services. Their read-only guarantee is the service's own where
-  it has one (BigQuery's read-only token scope) and the least-privilege role otherwise;
-  Snowflake lists at most 10 000 tables per database (a limit of SHOW); BigQuery fields
-  inside records are classified by name only; Athena is never sampled.
+  it has one (BigQuery's read-only token scope) and the least-privilege role otherwise.
+  SHOW returns at most 10 000 rows, so a Snowflake database whose SHOW TABLES reaches that
+  limit is listed again schema by schema in pages (`LIMIT 10000 FROM '<last name>'`); a
+  listing that cannot advance fails instead of reporting part of the database. Databricks
+  statements run with `on_wait_timeout: CANCEL` and the source's `timeout` (5 to 50 s) as
+  `wait_timeout`, so the service stops a statement itself (its default limit is two days).
+  BigQuery fields inside records are classified by name only; Athena is never sampled.
 - The language-model client was tested against a fake service with the interface
   api-data-discovery uses (`{"text"}` in, `entities` with `entity_group`, `score` and
   character `start` out), not against nlp-data-discovery itself; its labels are mapped as
