@@ -1,6 +1,7 @@
 # Agent protocol 1 (mode B): platform contract
 
-Status: **normative, revision 3 (2 November 2026)**. The agent side is implemented and
+Status: **normative, revision 3 (2 November 2026)**; revision 4 (further database engines)
+is a **proposal** the agent already follows (section 13). The agent side is implemented and
 tested in this repository (`internal/agent`, against an in-memory platform that follows
 this document, `internal/agent/fakeplatform_test.go`). Both Privasimu Nexus lines implement
 the platform side (branch `feat/bridge-agent-mode-b-2026-10-31` in each backend); revision 2
@@ -273,6 +274,13 @@ when a platform stops listing it (a downgrade), the agent sends the inventory wi
 A revision 2 platform refuses a whole inventory with an unknown kind, which is why the agent
 never sends kind `packages` before the platform asked for it.
 
+**Further engines (revision 4, proposal).** The same rule covers database engines beyond
+the five of revision 2: a platform that accepts one lists `source_engine:<engine>`
+(`source_engine:redshift`, `source_engine:clickhouse`); the agent includes `database`
+entries of that engine only when the last poll answer lists it, resends its inventory when
+the list changes, and logs once per source that a source is withheld. A platform that lists
+none (revision 2 or 3) never receives such an entry.
+
 The agent asks for `max_jobs` of at most 10 and waits `next_poll_seconds` between polls,
 within its configured `poll_min` (at least 1 s) and `poll_max` (at most 5 minutes, so a
 lost rotation answer is retried inside the 600 seconds).
@@ -287,7 +295,8 @@ Request:
 ```
 Rules: `sources_digest` *digest*; `sources` a list (`[]` when the agent offers nothing,
 never `null`) of at most 200 objects with unique *id*; `kind` `database` (engine
-`postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`), `files` (engine `filesystem`) or,
+`postgresql`, `mysql`, `mssql`, `oracle`, `mongodb`, and with revision 4 any engine the
+platform listed as `source_engine:<engine>`), `files` (engine `filesystem`) or,
 since revision 3, `packages` (engine `host`, `directory` or `image_archive`);
 `label` *label* (required: one invalid entry refuses the whole inventory); `description`
 absent, `null` or *text* (an empty string is stored as `null`); `capabilities` a list of
@@ -997,6 +1006,32 @@ unchanged, `errors.json` unchanged:
    `matcher_db_unavailable`, `target_unreadable` with their texts, kinds and retry rule
    (section 6.6).
 7. *Data model*: `bridge_jobs.sec_asset_id` (section 9).
+
+**Revision 4, proposal (4 November 2026; not normative until both lines implement it).**
+Further database engines, additive and negotiated like revision 3; protocol 1,
+`X-Bridge-Protocol: 1`, `errors.json` and every existing shape unchanged:
+
+1. *Platform features*: a platform that accepts an engine beyond revision 2 lists
+   `source_engine:<engine>` in `platform_features` (after the revision 3 entries, in the
+   order of this list): `source_engine:redshift` (Amazon Redshift, provisioned and
+   Serverless), `source_engine:clickhouse`.
+2. *Inventory*: `database` entries may carry those engines, only after the platform listed
+   them (section 5.2); the platform validates them like the other database entries. The
+   agent's `capabilities` already announce `engine:<engine>` for every engine it supports.
+3. *Jobs and results*: `test_source` and `scan_database` as for every database source; the
+   result's `engine` is the engine name and `server_version` its product and version
+   (`Redshift 1.0.77467`, `ClickHouse 24.8.4.13`). Failure codes are the `database_*` codes
+   of section 6.6.
+4. *Linking* (section 8): each engine fits one Data Discovery system type of the same key
+   (category `data_warehouse`); `BRIDGE_SOURCE_MISMATCH` applies as for the others. A
+   platform should list an engine only once that type exists in both lines.
+5. *Test plan*: an inventory with an engine the platform did not list is refused (400) as
+   before; with the feature listed it is accepted; an agent of revision 3 behaves as before.
+
+Mode A has no negotiation: the bridge accepts `db_type` `redshift` and `clickhouse` from a
+configured source (local credentials) once the platform's registry offers these types, and
+refuses them with request credentials (`unsupported_db_type`), so their credentials stay on
+the bridge.
 
 **Open items** (not normative yet):
 

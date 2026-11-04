@@ -11,8 +11,9 @@ counts and confidence**. Values, samples and file content never leave.
 - **Mode B** (agent and both platform lines): the bridge polls Privasimu for jobs and
   posts results, so the client opens **no inbound port**.
 
-Databases: PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, Oracle, MongoDB (pure-Go
-drivers; no Oracle Instant Client or ODBC). Files: TXT, CSV, JSON and other text, DOCX,
+Databases: PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, Oracle, MongoDB, and in mode B
+from agent protocol revision 4 Amazon Redshift and ClickHouse (pure-Go drivers, ClickHouse over
+its HTTP interface; no Oracle Instant Client or ODBC). Files: TXT, CSV, JSON and other text, DOCX,
 XLSX, PDF text. Software (mode B, opt-in): installed packages of a host, a directory or a
 local container image archive, with Syft, matched against vulnerability data with Grype or
 Trivy, for the security posture per RoPA; only package names, versions, licences and

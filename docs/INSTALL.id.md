@@ -307,6 +307,36 @@ db.createUser({ user: "privasimu_ro", pwd: passwordPrompt(), roles: [ { role: "r
 MongoDB tidak punya katalog skema: bridge membaca hingga 100 dokumen per koleksi di server
 bridge untuk mengetahui nama field. Nilainya hanya diperiksa bila sampling aktif.
 
+**Amazon Redshift** (provisioned atau Serverless; port 5439)
+```sql
+CREATE USER privasimu_ro PASSWORD '<kata sandi kuat>';
+-- Hanya nama: katalog sudah dapat dibaca tanpa izin lain. Untuk sampling lokal tambahkan:
+GRANT USAGE ON SCHEMA public TO privasimu_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO privasimu_ro;
+```
+Redshift tidak punya pengaturan sesi hanya-baca: jangan beri akun ini izin lain. Bridge
+memasang `statement_timeout` di setiap sesi (`timeout` sumber) dan mengambil sampel di dalam
+transaksi `BEGIN READ ONLY`. Pakai `tls: {mode: verify-full}`; otoritas sertifikat Amazon
+sudah ada di penyimpanan sertifikat sistem. Redshift tidak melaporkan jumlah baris.
+
+**ClickHouse** (antarmuka HTTP: port 8123, atau 8443 dengan TLS)
+```sql
+CREATE USER privasimu_ro IDENTIFIED WITH sha256_password BY '<kata sandi kuat>' HOST IP '<ip-bridge>';
+GRANT SHOW TABLES, SHOW COLUMNS ON crm.* TO privasimu_ro;   -- nama dan tipe
+GRANT SELECT ON crm.* TO privasimu_ro;                       -- hanya untuk sampling lokal
+```
+Bridge hanya mengirim permintaan `GET`, yang dijadikan hanya-baca oleh ClickHouse sendiri,
+dengan batas waktu di sisi server (`max_execution_time`, `timeout` sumber) dan, untuk
+sampling, batas baris. Jangan beri pengguna ini profil dengan `readonly = 1`: profil itu
+melarang batas-batas tersebut (`readonly = 2`, atau tanpa pengaturan, sudah tepat). Di
+ClickHouse, database adalah skema: yang didaftar adalah `database` sumber, atau database di
+`schemas`. Pakai port HTTPS dengan `tls: {mode: verify-full}` bila ClickHouse punya
+sertifikat.
+
+Sumber Redshift dan ClickHouse ditawarkan ke Privasimu di mode B setelah Privasimu menerima
+mesin ini (protokol agen revisi 4); sebelum itu agen mencatat di log bahwa sumber itu
+ditahan, dan `check` tetap mengujinya.
+
 ## 7. Simpan password dan tentukan sumber
 
 Simpan setiap password di penyimpanan terenkripsi (nilainya tidak tampil saat diketik):
@@ -323,7 +353,7 @@ Lalu tambahkan sumber ke `bridge.yaml` (setiap opsi dijelaskan di
 sources:
   - id: core-banking
     label: "Core banking"
-    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb
+    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
     host: 10.10.1.20
     database: corebank
     username: privasimu_ro
@@ -416,7 +446,7 @@ Hapus dengan `privasimu-bridge service uninstall` (konfigurasi dan data tetap ad
 1. Buka **Data Discovery** dan klik **Tambah Sistem**.
 2. Pilih **Tipe sumber data** sesuai basis datanya: PostgreSQL, MySQL, Microsoft SQL Server,
    atau Oracle. (Inilah tipe yang dapat dikirim Privasimu ke bridge. MongoDB lewat bridge
-   memerlukan mode B.)
+   memerlukan mode B, demikian pula Redshift dan ClickHouse.)
 3. Di **Kredensial & koneksi** isi isian standar:
    - **Host**: `match.host` sumbernya (misalnya `corebank`), atau `host`-nya bila tidak
      memakai alias;
