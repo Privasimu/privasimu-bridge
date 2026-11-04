@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeDatabricks answers the Statement Execution API: a statement that is first PENDING, a
@@ -84,6 +85,9 @@ func (f *fakeDatabricks) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(ok("s-cols", `["id","int","NO"],["nik","string","YES"],["kontak","varchar(20)","YES"],["joined","date","YES"]`, "")))
 	case stmt == "SELECT CAST(`nik` AS STRING), CAST(`kontak` AS STRING) FROM `main`.`default`.`customers` LIMIT 50" && body["row_limit"] == float64(50):
 		_, _ = w.Write([]byte(ok("s-sample", `["3171012303900001","0812-3456-7890"],["3171012303900001",null]`, "")))
+	case strings.HasPrefix(stmt, "SELECT column_name, full_data_type") && params["n"] == "slow":
+		// on_wait_timeout CANCEL: the service stopped the statement at wait_timeout.
+		_, _ = w.Write([]byte(`{"statement_id":"s-slow","status":{"state":"CANCELED"}}`))
 	default:
 		_, _ = w.Write([]byte(`{"statement_id":"s-err","status":{"state":"FAILED","error":{"error_code":"PERMISSION_DENIED","message":"User does not have SELECT on Table"}}}`))
 	}
@@ -140,6 +144,23 @@ func TestDatabricksReadsUnityCatalog(t *testing.T) {
 	for _, b := range fake.bodies {
 		if b["warehouse_id"] != "abc123" || b["catalog"] != "main" || b["disposition"] != "INLINE" || b["format"] != "JSON_ARRAY" {
 			t.Fatalf("request: %v", b)
+		}
+		// The service cancels a statement at the source's timeout (5s here), so none
+		// outlives the bridge.
+		if b["on_wait_timeout"] != "CANCEL" || b["wait_timeout"] != "5s" {
+			t.Fatalf("statement limits: %v", b)
+		}
+	}
+	if _, err := conn.Columns(ctx, Table{Schema: "default", Name: "slow"}); KindOf(err) != KindTimeout {
+		t.Fatalf("a statement cancelled at wait_timeout is a timeout: %s (%v)", KindOf(err), err)
+	}
+}
+
+func TestDatabricksWaitTimeoutIsTheSourceTimeoutWithinTheAPILimits(t *testing.T) {
+	for in, want := range map[time.Duration]string{time.Second: "5s", 5 * time.Second: "5s", 20 * time.Second: "20s",
+		20500 * time.Millisecond: "21s", 50 * time.Second: "50s", 2 * time.Minute: "50s"} {
+		if got := dbxWaitTimeout(in); got != want {
+			t.Errorf("%v: %s, want %s", in, got, want)
 		}
 	}
 }

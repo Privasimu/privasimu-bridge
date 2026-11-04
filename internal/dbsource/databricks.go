@@ -144,6 +144,13 @@ func dbxKind(code string) string {
 	return ""
 }
 
+// dbxWaitTimeout is the source's timeout as the wait_timeout of a statement: whole seconds,
+// rounded up, within the 5 to 50 seconds the API accepts.
+func dbxWaitTimeout(timeout time.Duration) string {
+	s := int((timeout + time.Second - 1) / time.Second)
+	return strconv.Itoa(min(max(s, 5), 50)) + "s"
+}
+
 // call sends one request of the API.
 func (c *dbxConn) call(ctx context.Context, method, path string, body any, out any) error {
 	token, err := c.accessToken(ctx)
@@ -171,11 +178,16 @@ func (c *dbxConn) call(ctx context.Context, method, path string, body any, out a
 
 // run executes one statement with named parameters (:name) and calls fn for each row.
 // rowLimit > 0 makes the service stop after that many rows.
+//
+// Databricks itself cancels a statement that has not finished within wait_timeout
+// (on_wait_timeout CANCEL), so a statement never outlives the source's timeout, even when
+// the bridge stops before it could cancel it. With CONTINUE the statement would keep
+// running up to the warehouse's statement timeout, two days by default.
 func (c *dbxConn) run(ctx context.Context, stmt string, params map[string]string, rowLimit int, fn func([]*string) error) error {
 	ctx, cancel := context.WithTimeout(ctx, c.t.Timeout+30*time.Second)
 	defer cancel()
 	body := map[string]any{"warehouse_id": c.warehouse, "statement": stmt, "catalog": c.t.Database,
-		"wait_timeout": "30s", "on_wait_timeout": "CONTINUE", "disposition": "INLINE", "format": "JSON_ARRAY"}
+		"wait_timeout": dbxWaitTimeout(c.t.Timeout), "on_wait_timeout": "CANCEL", "disposition": "INLINE", "format": "JSON_ARRAY"}
 	if rowLimit > 0 {
 		body["row_limit"] = rowLimit
 	}
@@ -219,6 +231,10 @@ func (c *dbxConn) run(ctx context.Context, stmt string, params map[string]string
 	}
 	if st.Status.State != "SUCCEEDED" {
 		e := &cloudError{Service: "databricks", Code: st.Status.State, Kind: KindDatabase}
+		if st.Status.State == "CANCELED" {
+			// Cancelled at wait_timeout (on_wait_timeout CANCEL): the source's timeout passed.
+			e.Kind = KindTimeout
+		}
 		if st.Status.Error != nil {
 			e.Code, e.Message = st.Status.Error.ErrorCode, st.Status.Error.Message
 			if k := dbxKind(e.Code); k != "" {
