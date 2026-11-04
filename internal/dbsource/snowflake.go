@@ -339,20 +339,102 @@ func (c *sfConn) tablesOf(cols map[string]int, row []*string, requested string, 
 	add(t)
 }
 
+// sfShowLimit is the most rows a SHOW command returns, whatever its filter: a listing that
+// long may have more behind it.
+const sfShowLimit = 10000
+
+// sfMaxPages bounds the pages of one SHOW listing (100 million objects).
+const sfMaxPages = 10000
+
+// errSfPaging means a SHOW listing could not be completed: a full page brought nothing new.
+var errSfPaging = errors.New("snowflake: the SHOW listing did not advance past a full page")
+
 func (c *sfConn) ListTables(ctx context.Context, schema string) ([]Table, error) {
 	if _, err := listingSchemas(c.t, schema); err != nil {
 		return nil, err
 	}
 	var out []Table
+	add := func(t Table) { out = append(out, t) }
+	rows := 0
 	err := c.run(ctx, "SHOW TABLES IN DATABASE "+c.db, nil, func(cols map[string]int, row []*string) error {
-		c.tablesOf(cols, row, schema, func(t Table) { out = append(out, t) })
+		rows++
+		c.tablesOf(cols, row, schema, add)
 		return nil
 	})
+	if err == nil && rows >= sfShowLimit {
+		// SHOW stopped at its row limit, so tables may be missing: list again schema by
+		// schema, page by page, rather than report part of the database as all of it.
+		out = nil
+		err = c.listBySchema(ctx, schema, add)
+	}
 	if err != nil {
 		return nil, wrap("list tables", err, true)
 	}
 	sortTables(out, "PUBLIC")
 	return out, nil
+}
+
+// listBySchema lists the tables of every allowed schema (or of the requested one), each
+// schema page by page.
+func (c *sfConn) listBySchema(ctx context.Context, requested string, add func(Table)) error {
+	var schemas []string
+	if err := c.showAll(ctx, "SHOW SCHEMAS IN DATABASE "+c.db, func(cols map[string]int, row []*string) {
+		name, ok := col(cols, row, "name")
+		if ok && validName(name) && !strings.EqualFold(name, "INFORMATION_SCHEMA") && c.t.schemaAllowed(name) &&
+			(requested == "" || strings.EqualFold(name, requested)) {
+			schemas = append(schemas, name)
+		}
+	}); err != nil {
+		return err
+	}
+	for _, s := range schemas {
+		if err := c.showAll(ctx, "SHOW TABLES IN SCHEMA "+c.db+"."+sfQuote(s), func(cols map[string]int, row []*string) {
+			c.tablesOf(cols, row, requested, add)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// showAll runs a SHOW command over objects whose names are unique in its scope, in pages
+// of sfShowLimit rows (LIMIT n FROM '<last name>'), and calls fn once per object. Whether
+// the page after a cursor repeats the cursor's row or not, each object is passed once; a
+// full page that brings nothing new is an error, never a shorter listing.
+func (c *sfConn) showAll(ctx context.Context, show string, fn func(cols map[string]int, row []*string)) error {
+	seen := map[string]bool{}
+	from := ""
+	for page := 0; ; page++ {
+		stmt := show + " LIMIT " + strconv.Itoa(sfShowLimit)
+		if from != "" {
+			stmt += " FROM " + sfLike(from) // the same quoting; FROM has no wildcards
+		}
+		rows, fresh, last := 0, 0, ""
+		err := c.run(ctx, stmt, nil, func(cols map[string]int, row []*string) error {
+			rows++
+			name, ok := col(cols, row, "name")
+			if !ok {
+				return nil
+			}
+			last = name
+			if seen[name] {
+				return nil
+			}
+			seen[name] = true
+			fresh++
+			fn(cols, row)
+			return nil
+		})
+		switch {
+		case err != nil:
+			return err
+		case rows < sfShowLimit:
+			return nil
+		case fresh == 0 || page+1 >= sfMaxPages:
+			return errSfPaging
+		}
+		from = last
+	}
 }
 
 // sfLike writes a name as the string literal of a SHOW ... LIKE pattern. The wildcards _ and
