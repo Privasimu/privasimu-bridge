@@ -328,6 +328,101 @@ Redshift and ClickHouse sources are offered to Privasimu in mode B once Privasim
 these engines (agent protocol revision 4); until then the agent logs that it withholds
 them, and `check` tests them.
 
+### 6.1 Cloud warehouses (Snowflake, BigQuery, Databricks, Athena)
+
+The bridge reaches these services over HTTPS with verified TLS only (`tls.mode` is always
+`verify-full`), through each service's own REST API. The credentials stay in the bridge's
+secret store; the service sees requests from the bridge server only. If the server reaches
+the internet through a proxy, set `HTTPS_PROXY` (and `NO_PROXY`) for the service:
+`systemctl edit privasimu-bridge` → `Environment=HTTPS_PROXY=http://proxy.corp:3128`, or on
+Windows the service's environment. Keys are stored from a file without showing them, then
+the file is removed: `sudo privasimu-bridge secret set NAME < key-file && shred -u key-file`.
+
+**Snowflake** (key pair, as Snowflake recommends for service users; a programmatic access
+token in `password` works too). On the bridge server:
+```sh
+openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out sf_key.p8
+openssl rsa -in sf_key.p8 -pubout -out sf_key.pub
+sudo privasimu-bridge secret set sf_key < sf_key.p8 && shred -u sf_key.p8
+```
+In Snowflake (as SECURITYADMIN), with the body of `sf_key.pub` without its header lines:
+```sql
+CREATE ROLE privasimu_reader;
+GRANT USAGE ON DATABASE corebank TO ROLE privasimu_reader;
+GRANT USAGE ON ALL SCHEMAS IN DATABASE corebank TO ROLE privasimu_reader;
+GRANT REFERENCES ON ALL TABLES IN DATABASE corebank TO ROLE privasimu_reader;   -- names and types
+-- local sampling only: a warehouse and SELECT
+GRANT USAGE ON WAREHOUSE scan_wh TO ROLE privasimu_reader;
+GRANT SELECT ON ALL TABLES IN DATABASE corebank TO ROLE privasimu_reader;
+CREATE USER privasimu_ro TYPE = SERVICE DEFAULT_ROLE = privasimu_reader RSA_PUBLIC_KEY = '<public key>';
+GRANT ROLE privasimu_reader TO USER privasimu_ro;
+```
+```yaml
+  - id: dwh
+    engine: snowflake
+    host: myorg-myaccount          # account identifier, or the full *.snowflakecomputing.com name
+    database: corebank
+    username: privasimu_ro
+    private_key: "secret:sf_key"   # or password: "secret:sf_pat" (a programmatic access token)
+    role: privasimu_reader
+    warehouse: scan_wh             # needed for sampling only; the catalog is read with SHOW
+```
+Snowflake has no read-only session setting, so the role is the limit; every statement
+carries a server-side timeout. Privasimu's Snowflake type works in mode A with this source
+(type the source's `match.host` as host); in mode B it follows revision 4.
+
+**Google BigQuery** (a service account; the bridge asks only for the read-only BigQuery scope,
+so Google refuses anything else whatever its roles). Grant the service account *BigQuery
+Metadata Viewer* (names and types) on the project or the datasets, and *BigQuery Data
+Viewer* for local sampling; create a JSON key and store it:
+`sudo privasimu-bridge secret set bq_key < key.json && shred -u key.json`.
+```yaml
+  - id: analytics
+    engine: bigquery
+    database: my-gcp-project       # the project id
+    schemas: [crm, sales]          # datasets; empty = every dataset of the project
+    credentials: "secret:bq_key"
+```
+The bridge runs no query job: it reads the catalog with `tables.get` and samples with
+`tabledata.list` (no query cost). Fields inside records are classified by name only.
+
+**Databricks SQL** (Unity Catalog). Use a service principal with an OAuth secret
+(`username` = its application id, `password` = the secret) or a personal access token
+(`password` only), and give it `CAN USE` on a SQL warehouse:
+```sql
+GRANT USE CATALOG ON CATALOG main TO `privasimu-bridge`;
+GRANT USE SCHEMA ON CATALOG main TO `privasimu-bridge`;
+GRANT BROWSE ON CATALOG main TO `privasimu-bridge`;       -- names and types
+GRANT SELECT ON CATALOG main TO `privasimu-bridge`;       -- only for local sampling
+```
+```yaml
+  - id: lakehouse
+    engine: databricks
+    host: adb-1234567890123456.7.azuredatabricks.net
+    database: main                 # the catalog
+    warehouse: /sql/1.0/warehouses/abc123def456   # its id or HTTP path
+    username: 9f1c…-application-id # omit for a personal access token
+    password: "secret:dbx_secret"
+```
+
+**Amazon Athena** (catalog only: every Athena query writes its result to S3, so the bridge
+never samples Athena). An IAM user or role with this policy (narrow the resources):
+```json
+{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": [
+  "athena:ListDatabases", "athena:ListTableMetadata", "athena:GetTableMetadata",
+  "glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"], "Resource": "*"}]}
+```
+```yaml
+  - id: datalake
+    engine: athena
+    region: ap-southeast-3
+    database: AwsDataCatalog       # the data catalog (default AwsDataCatalog)
+    schemas: [crm]                 # Glue databases; empty = every database
+    username: AKIA…                # access key id
+    password: "secret:aws_secret"  # secret access key
+    session_token: "env:AWS_SESSION_TOKEN"   # optional, for temporary credentials
+```
+
 ## 7. Store the passwords and define the sources
 
 Store each password in the encrypted store (the value is not shown while you type):
@@ -344,7 +439,7 @@ Then add the sources to `bridge.yaml` (every option is explained in
 sources:
   - id: core-banking
     label: "Core banking"
-    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
+    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse | snowflake | bigquery | databricks | athena (section 6.1)
     host: 10.10.1.20
     database: corebank
     username: privasimu_ro

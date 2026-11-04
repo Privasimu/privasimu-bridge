@@ -337,6 +337,102 @@ Sumber Redshift dan ClickHouse ditawarkan ke Privasimu di mode B setelah Privasi
 mesin ini (protokol agen revisi 4); sebelum itu agen mencatat di log bahwa sumber itu
 ditahan, dan `check` tetap mengujinya.
 
+### 6.1 Gudang data cloud (Snowflake, BigQuery, Databricks, Athena)
+
+Bridge menjangkau layanan ini lewat HTTPS dengan TLS terverifikasi saja (`tls.mode` selalu
+`verify-full`), melalui REST API masing-masing layanan. Kredensial tetap di penyimpanan
+rahasia bridge; layanan hanya melihat permintaan dari server bridge. Bila server keluar ke
+internet lewat proxy, pasang `HTTPS_PROXY` (dan `NO_PROXY`) untuk layanannya:
+`systemctl edit privasimu-bridge` → `Environment=HTTPS_PROXY=http://proxy.corp:3128`, atau di
+Windows pada environment layanannya. Kunci disimpan dari berkas tanpa ditampilkan, lalu
+berkasnya dihapus: `sudo privasimu-bridge secret set NAMA < berkas-kunci && shred -u berkas-kunci`.
+
+**Snowflake** (pasangan kunci, sebagaimana dianjurkan Snowflake untuk pengguna layanan;
+programmatic access token di `password` juga dapat dipakai). Di server bridge:
+```sh
+openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out sf_key.p8
+openssl rsa -in sf_key.p8 -pubout -out sf_key.pub
+sudo privasimu-bridge secret set sf_key < sf_key.p8 && shred -u sf_key.p8
+```
+Di Snowflake (sebagai SECURITYADMIN), dengan isi `sf_key.pub` tanpa baris kepala dan ekornya:
+```sql
+CREATE ROLE privasimu_reader;
+GRANT USAGE ON DATABASE corebank TO ROLE privasimu_reader;
+GRANT USAGE ON ALL SCHEMAS IN DATABASE corebank TO ROLE privasimu_reader;
+GRANT REFERENCES ON ALL TABLES IN DATABASE corebank TO ROLE privasimu_reader;   -- nama dan tipe
+-- hanya untuk sampling lokal: warehouse dan SELECT
+GRANT USAGE ON WAREHOUSE scan_wh TO ROLE privasimu_reader;
+GRANT SELECT ON ALL TABLES IN DATABASE corebank TO ROLE privasimu_reader;
+CREATE USER privasimu_ro TYPE = SERVICE DEFAULT_ROLE = privasimu_reader RSA_PUBLIC_KEY = '<kunci publik>';
+GRANT ROLE privasimu_reader TO USER privasimu_ro;
+```
+```yaml
+  - id: dwh
+    engine: snowflake
+    host: myorg-myaccount          # account identifier, atau nama lengkap *.snowflakecomputing.com
+    database: corebank
+    username: privasimu_ro
+    private_key: "secret:sf_key"   # atau password: "secret:sf_pat" (programmatic access token)
+    role: privasimu_reader
+    warehouse: scan_wh             # hanya untuk sampling; katalog dibaca dengan SHOW
+```
+Snowflake tidak punya pengaturan sesi hanya-baca, jadi peran (role) itulah batasnya; setiap
+pernyataan membawa batas waktu di sisi server. Tipe Snowflake di Privasimu bekerja di mode A
+dengan sumber ini (isi host dengan `match.host` sumber); di mode B mengikuti revisi 4.
+
+**Google BigQuery** (service account; bridge hanya meminta scope BigQuery hanya-baca,
+sehingga Google menolak selain membaca apa pun perannya). Beri service account peran
+*BigQuery Metadata Viewer* (nama dan tipe) pada proyek atau dataset, dan *BigQuery Data
+Viewer* untuk sampling lokal; buat kunci JSON lalu simpan:
+`sudo privasimu-bridge secret set bq_key < key.json && shred -u key.json`.
+```yaml
+  - id: analytics
+    engine: bigquery
+    database: my-gcp-project       # id proyek
+    schemas: [crm, sales]          # dataset; kosong = semua dataset proyek
+    credentials: "secret:bq_key"
+```
+Bridge tidak menjalankan query job: katalog dibaca dengan `tables.get` dan sampel dengan
+`tabledata.list` (tanpa biaya query). Field di dalam record diklasifikasikan dari namanya saja.
+
+**Databricks SQL** (Unity Catalog). Pakai service principal dengan OAuth secret
+(`username` = application id-nya, `password` = secret-nya) atau personal access token
+(`password` saja), dan beri `CAN USE` pada SQL warehouse:
+```sql
+GRANT USE CATALOG ON CATALOG main TO `privasimu-bridge`;
+GRANT USE SCHEMA ON CATALOG main TO `privasimu-bridge`;
+GRANT BROWSE ON CATALOG main TO `privasimu-bridge`;       -- nama dan tipe
+GRANT SELECT ON CATALOG main TO `privasimu-bridge`;       -- hanya untuk sampling lokal
+```
+```yaml
+  - id: lakehouse
+    engine: databricks
+    host: adb-1234567890123456.7.azuredatabricks.net
+    database: main                 # catalog
+    warehouse: /sql/1.0/warehouses/abc123def456   # id atau HTTP path-nya
+    username: 9f1c…-application-id # kosongkan untuk personal access token
+    password: "secret:dbx_secret"
+```
+
+**Amazon Athena** (katalog saja: setiap kueri Athena menulis hasilnya ke S3, sehingga bridge
+tidak pernah mengambil sampel Athena). Pengguna atau peran IAM dengan kebijakan ini
+(persempit resource-nya):
+```json
+{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": [
+  "athena:ListDatabases", "athena:ListTableMetadata", "athena:GetTableMetadata",
+  "glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"], "Resource": "*"}]}
+```
+```yaml
+  - id: datalake
+    engine: athena
+    region: ap-southeast-3
+    database: AwsDataCatalog       # data catalog (bawaan AwsDataCatalog)
+    schemas: [crm]                 # database Glue; kosong = semua database
+    username: AKIA…                # access key id
+    password: "secret:aws_secret"  # secret access key
+    session_token: "env:AWS_SESSION_TOKEN"   # opsional, untuk kredensial sementara
+```
+
 ## 7. Simpan password dan tentukan sumber
 
 Simpan setiap password di penyimpanan terenkripsi (nilainya tidak tampil saat diketik):
@@ -353,7 +449,7 @@ Lalu tambahkan sumber ke `bridge.yaml` (setiap opsi dijelaskan di
 sources:
   - id: core-banking
     label: "Core banking"
-    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
+    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse | snowflake | bigquery | databricks | athena (bagian 6.1)
     host: 10.10.1.20
     database: corebank
     username: privasimu_ro

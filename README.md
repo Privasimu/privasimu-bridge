@@ -12,8 +12,10 @@ counts and confidence**. Values, samples and file content never leave.
   posts results, so the client opens **no inbound port**.
 
 Databases: PostgreSQL, MySQL and MariaDB, Microsoft SQL Server, Oracle, MongoDB, and in mode B
-from agent protocol revision 4 Amazon Redshift and ClickHouse (pure-Go drivers, ClickHouse over
-its HTTP interface; no Oracle Instant Client or ODBC). Files: TXT, CSV, JSON and other text, DOCX,
+from agent protocol revision 4 Amazon Redshift, ClickHouse, Snowflake (also mode A), Google
+BigQuery, Databricks SQL and Amazon Athena (catalog only) (pure-Go drivers; ClickHouse and the
+cloud warehouses over their HTTP APIs with the standard library; no Oracle Instant Client or
+ODBC). Files: TXT, CSV, JSON and other text, DOCX,
 XLSX, PDF text. Software (mode B, opt-in): installed packages of a host, a directory or a
 local container image archive, with Syft, matched against vulnerability data with Grype or
 Trivy, for the security posture per RoPA; only package names, versions, licences and

@@ -276,7 +276,7 @@ never sends kind `packages` before the platform asked for it.
 
 **Further engines (revision 4, proposal).** The same rule covers database engines beyond
 the five of revision 2: a platform that accepts one lists `source_engine:<engine>`
-(`source_engine:redshift`, `source_engine:clickhouse`); the agent includes `database`
+(`source_engine:redshift`, `source_engine:snowflake`, ..., section 13); the agent includes `database`
 entries of that engine only when the last poll answer lists it, resends its inventory when
 the list changes, and logs once per source that a source is withheld. A platform that lists
 none (revision 2 or 3) never receives such an entry.
@@ -1014,24 +1014,30 @@ Further database engines, additive and negotiated like revision 3; protocol 1,
 1. *Platform features*: a platform that accepts an engine beyond revision 2 lists
    `source_engine:<engine>` in `platform_features` (after the revision 3 entries, in the
    order of this list): `source_engine:redshift` (Amazon Redshift, provisioned and
-   Serverless), `source_engine:clickhouse`.
+   Serverless), `source_engine:clickhouse`, `source_engine:snowflake`,
+   `source_engine:bigquery`, `source_engine:databricks` (Databricks SQL, Unity Catalog),
+   `source_engine:athena` (Amazon Athena, catalog only).
 2. *Inventory*: `database` entries may carry those engines, only after the platform listed
    them (section 5.2); the platform validates them like the other database entries. The
    agent's `capabilities` already announce `engine:<engine>` for every engine it supports.
+   An `athena` entry never has the capability `sampling`.
 3. *Jobs and results*: `test_source` and `scan_database` as for every database source; the
    result's `engine` is the engine name and `server_version` its product and version
-   (`Redshift 1.0.77467`, `ClickHouse 24.8.4.13`). Failure codes are the `database_*` codes
-   of section 6.6.
+   (`Redshift 1.0.77467`, `ClickHouse 24.8.4.13`, `Snowflake 9.34.1`; `BigQuery`,
+   `Databricks SQL` and `Amazon Athena` without a version). For BigQuery and Athena a schema
+   is a dataset or a database, and with more than one allowed every table name is
+   `schema.table`. Failure codes are the `database_*` codes of section 6.6.
 4. *Linking* (section 8): each engine fits one Data Discovery system type of the same key
    (category `data_warehouse`); `BRIDGE_SOURCE_MISMATCH` applies as for the others. A
    platform should list an engine only once that type exists in both lines.
 5. *Test plan*: an inventory with an engine the platform did not list is refused (400) as
    before; with the feature listed it is accepted; an agent of revision 3 behaves as before.
 
-Mode A has no negotiation: the bridge accepts `db_type` `redshift` and `clickhouse` from a
-configured source (local credentials) once the platform's registry offers these types, and
-refuses them with request credentials (`unsupported_db_type`), so their credentials stay on
-the bridge.
+Mode A has no negotiation: the bridge accepts `db_type` `snowflake` (already in the
+platform's registry) and `redshift`, `clickhouse`, `bigquery`, `databricks` and `athena`
+(once the registry offers them) from a configured source (local credentials), and refuses
+them with request credentials (`unsupported_db_type`), so their credentials stay on the
+bridge.
 
 **Open items** (not normative yet):
 
