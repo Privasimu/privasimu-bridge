@@ -128,6 +128,7 @@ func (c *Config) Validate() error {
 	}
 	c.validatePackages(&p, seen)
 	validateSampling(&p, "detection.sampling", &c.Detection.Sampling)
+	validateNLP(&p, &c.Detection.NLP)
 	if n := len(c.Sources) + len(c.Files.Roots) + len(c.Packages.Targets); n > MaxInventory {
 		p.add("config.inventory_size", n, MaxInventory)
 	}
@@ -303,6 +304,41 @@ func validateCloudSource(p *problems, at string, s *SourceConfig) {
 	}
 	if s.Sampling != nil {
 		validateSampling(p, at+".sampling", s.Sampling)
+	}
+}
+
+// NLPRanges are the addresses an NLP endpoint may resolve to: loopback and private ranges
+// (the service runs on this server or inside the client's network, never outside it).
+var NLPRanges = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"}
+
+// validateNLP checks the optional NLP service: an http(s) URL without credentials, query or
+// fragment, whose host is a name (checked when connecting) or an address in NLPRanges, and
+// bounded limits.
+func validateNLP(p *problems, n *NLPConfig) {
+	if !n.Enabled {
+		return
+	}
+	u, err := url.Parse(n.Endpoint)
+	ok := err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" &&
+		u.Fragment == "" && !hasControl(n.Endpoint)
+	if ok {
+		if a, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]")); err == nil {
+			ok = false
+			for _, r := range NLPRanges {
+				if pfx, _ := netip.ParsePrefix(r); pfx.Contains(a.Unmap()) {
+					ok = true
+				}
+			}
+		} else if !hostPattern.MatchString(u.Hostname()) {
+			ok = false
+		}
+	}
+	if !ok {
+		p.add("config.nlp_endpoint", "detection.nlp.endpoint")
+	}
+	if n.Timeout.D() < time.Second || n.Timeout.D() > time.Minute || n.MinChars < 20 || n.MinChars > 100000 ||
+		n.MaxBytes < 1<<10 || n.MaxBytes > 1<<20 || n.MinScore < 0 || n.MinScore > 1 || n.Concurrency < 1 || n.Concurrency > 16 {
+		p.add("config.nlp_limits", "detection.nlp")
 	}
 }
 

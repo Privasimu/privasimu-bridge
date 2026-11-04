@@ -25,6 +25,7 @@ import (
 	"github.com/privasimu/bridge/internal/buildinfo"
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
+	"github.com/privasimu/bridge/internal/detect"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/netguard"
 	"github.com/privasimu/bridge/internal/secrets"
@@ -39,6 +40,8 @@ type Deps struct {
 	Log      *slog.Logger
 	// Files serves the optional file-root endpoints (nil = off).
 	Files *files.Service
+	// Entities is the optional local NLP service (detection.nlp); nil = patterns only.
+	Entities detect.EntityCounter
 }
 
 // Server handles contract v1 requests.
@@ -58,6 +61,7 @@ type Server struct {
 	allowedClients []netip.Prefix
 	trustedProxies []netip.Prefix
 	files          *files.Service
+	entities       detect.EntityCounter
 }
 
 // New builds a server from a validated configuration.
@@ -72,10 +76,11 @@ func New(d Deps) (*Server, error) {
 	}
 	s := &Server{
 		cfg: cfg, verifier: v, resolver: d.Resolver, pool: d.Pool, audit: d.Audit, log: d.Log,
-		limits: newLimiter(cfg.Server.Limits.RatePerSecond, cfg.Server.Limits.Burst, cfg.Server.Limits.AuthFailures, cfg.Server.Limits.Lockout.D()),
-		busy:   make(chan struct{}, cfg.Server.Limits.MaxConcurrent),
-		slots:  map[string]chan struct{}{},
-		files:  d.Files,
+		limits:   newLimiter(cfg.Server.Limits.RatePerSecond, cfg.Server.Limits.Burst, cfg.Server.Limits.AuthFailures, cfg.Server.Limits.Lockout.D()),
+		busy:     make(chan struct{}, cfg.Server.Limits.MaxConcurrent),
+		slots:    map[string]chan struct{}{},
+		files:    d.Files,
+		entities: d.Entities,
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)

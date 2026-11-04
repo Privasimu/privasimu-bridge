@@ -17,6 +17,7 @@ import (
 	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/i18n"
+	"github.com/privasimu/bridge/internal/nlp"
 	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 )
@@ -71,6 +72,7 @@ func (a *app) cmdCheck(args []string) error {
 	}
 	if *only == "" {
 		c.checkRoots(cfg)
+		c.checkNLP(ctx, cfg)
 		c.checkPackages(cfg)
 		if len(cfg.Server.APIKeys) > 0 {
 			c.checkServer(cfg)
@@ -84,6 +86,25 @@ func (a *app) cmdCheck(args []string) error {
 	}
 	a.printf("cli.check.done", c.warnings)
 	return nil
+}
+
+// checkNLP sends a short synthetic text to the optional NLP service. A failure is a
+// warning: the bridge then uses its patterns and validators only.
+func (c *checker) checkNLP(ctx context.Context, cfg *config.Config) {
+	client, err := nlp.New(cfg, nil)
+	if err != nil {
+		c.fail("cli.check.nlp_failed", cfg.Detection.NLP.Endpoint, err.Error())
+		return
+	}
+	if client == nil {
+		return
+	}
+	took, err := client.Check(ctx)
+	if err != nil {
+		c.warn("cli.check.nlp_failed", cfg.Detection.NLP.Endpoint, err.Error())
+		return
+	}
+	c.ok("cli.check.nlp_ok", cfg.Detection.NLP.Endpoint, took.Milliseconds())
 }
 
 func (c *checker) checkSecrets(cfg *config.Config, r *secrets.Resolver) {

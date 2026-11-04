@@ -373,6 +373,9 @@ func (s *Server) tableColumns(ctx context.Context, req *v1Request, ev *audit.Eve
 		Sampling: r.sampling.On(), Rows: r.sampling.Rows, MaxColumns: s.cfg.Server.Limits.MaxColumns,
 		Thresholds: detect.Thresholds{MinMatches: r.sampling.MinMatches, Ratio: r.sampling.Ratio},
 	}
+	if s.entities != nil {
+		opts.Entities, opts.EntityMinChars, opts.EntityMaxBytes = s.entities, s.cfg.Detection.NLP.MinChars, int(s.cfg.Detection.NLP.MaxBytes)
+	}
 	a, err := scan.AnalyzeTable(ctx, conn, table, opts)
 	if err != nil {
 		s.log.Warn("column analysis failed", "source", sourceID(r), "error", dbErrMessage(err))

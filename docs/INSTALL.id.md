@@ -482,6 +482,34 @@ sudo privasimu-bridge --lang id check
 # [OK]   sumber core-banking: PostgreSQL 16.4, 120 tabel, TLS aktif, sampling mati (hanya nama)
 ```
 
+### 7.1 Opsional: model bahasa untuk teks panjang
+
+Pola menemukan NIK, nomor telepon, dan alamat email, tetapi tidak menemukan nama, alamat,
+atau diagnosis yang ditulis sebagai teks bebas (kolom `keterangan`, sebuah surat). Bila Anda
+menjalankan layanan model untuk itu, misalnya `nlp-data-discovery` milik Privasimu, di
+server bridge atau di dalam jaringan Anda, bridge dapat memintanya:
+
+```yaml
+detection:
+  nlp:
+    enabled: true
+    endpoint: "http://127.0.0.1:8333/"   # layanan Anda; hanya alamat loopback atau privat
+```
+
+- Teks hanya dikirim **ke layanan Anda**: setiap koneksi diperiksa terhadap rentang loopback
+  dan privat lalu dikunci ke alamat itu, tanpa proxy maupun redirect. Bridge hanya menyimpan
+  jumlah per kategori; platform melihat kategori dan jumlah seperti biasa.
+- Yang dikirim: nilai sampel sebuah kolom yang panjangnya minimal `min_chars` (200)
+  karakter, paling banyak `max_bytes` (32 KiB) per kolom, dan `max_bytes` pertama teks
+  sebuah berkas. Untuk basis data, sampling harus aktif; berkas selalu diperiksa bila
+  `content_scan` aktif.
+- Model menambahkan kategori yang tidak dapat divalidasi pola (nama, alamat, tanggal lahir,
+  kesehatan, agama, ...); NIK, telepon, email, dan pengenal tervalidasi lain tetap dihitung
+  validator, sehingga tidak ada yang terhitung dua kali.
+- Bila layanan tidak menjawab dalam `timeout` (10 detik), bridge memakai pola dan
+  validatornya saja selama satu menit dan mencatatnya sekali di log. `check` mengirim teks
+  sintetis pendek: `[OK]   layanan NLP http://127.0.0.1:8333/: menjawab dalam 85 ms`.
+
 ## 8. Berbagi berkas (mode B dan laporan lokal)
 
 Root berkas dipindai lewat mode B atau secara lokal lewat baris perintah. Hanya folder

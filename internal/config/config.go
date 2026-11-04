@@ -240,6 +240,27 @@ type FileRoot struct {
 // DetectionConfig holds the global detection settings.
 type DetectionConfig struct {
 	Sampling SamplingOptions `yaml:"sampling"`
+	NLP      NLPConfig       `yaml:"nlp"`
+}
+
+// NLPConfig turns on an optional language-model service that finds personal data the
+// patterns cannot (names, addresses, health, religion, ...) in long text: sampled text
+// values of a column and the text of files. The service runs on this server or the
+// client's internal network (for example the client's own nlp-data-discovery): text is
+// sent to it only, and only the counts it returns are used. Off by default.
+type NLPConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the URL the text is posted to; its host must be loopback or a private
+	// address (checked at every connection).
+	Endpoint string `yaml:"endpoint"`
+	CAFile   string `yaml:"ca_file"`
+	// Timeout of one request; MinChars the shortest text sent; MaxBytes the most text of one
+	// file or one column sent in one request; MinScore the least confidence of an entity.
+	Timeout     Duration `yaml:"timeout"`
+	MinChars    int      `yaml:"min_chars"`
+	MaxBytes    ByteSize `yaml:"max_bytes"`
+	MinScore    float64  `yaml:"min_score"`
+	Concurrency int      `yaml:"concurrency"`
 }
 
 // SecretsConfig locates the encrypted secret store.
@@ -472,6 +493,22 @@ func (c *Config) applyDefaults() {
 	}
 	if sp.Ratio <= 0 {
 		sp.Ratio = 0.2
+	}
+	nlp := &c.Detection.NLP
+	if nlp.Timeout <= 0 {
+		nlp.Timeout = Duration(10e9)
+	}
+	if nlp.MinChars <= 0 {
+		nlp.MinChars = 200
+	}
+	if nlp.MaxBytes <= 0 {
+		nlp.MaxBytes = 32 << 10
+	}
+	if nlp.MinScore <= 0 {
+		nlp.MinScore = 0.8
+	}
+	if nlp.Concurrency <= 0 {
+		nlp.Concurrency = 2
 	}
 	if c.Secrets.File == "" {
 		c.Secrets.File = "secrets.enc"

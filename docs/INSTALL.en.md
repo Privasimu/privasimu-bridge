@@ -473,6 +473,34 @@ sudo privasimu-bridge check
 # [OK]   source core-banking: PostgreSQL 16.4, 120 tables, TLS on, sampling off (names only)
 ```
 
+### 7.1 Optional: a language model for long text
+
+Patterns find NIKs, phone numbers and e-mail addresses, but not a name, an address or a
+diagnosis written in free text (a `notes` column, a letter). If you run a model service for
+that, for example Privasimu's `nlp-data-discovery`, on the bridge server or inside your
+network, the bridge can ask it:
+
+```yaml
+detection:
+  nlp:
+    enabled: true
+    endpoint: "http://127.0.0.1:8333/"   # your service; loopback or private addresses only
+```
+
+- The text goes **to your service only**: every connection is checked against loopback and
+  private ranges and pinned to that address, without a proxy or redirect. The bridge keeps
+  only the counts per category; the platform sees categories and counts as before.
+- What is sent: sampled values of a column that have at least `min_chars` (200)
+  characters, at most `max_bytes` (32 KiB) per column, and the first `max_bytes` of a file's
+  text. It needs sampling to be on for databases; files are always examined when
+  `content_scan` is on.
+- The model adds categories the patterns cannot validate (names, addresses, dates of birth,
+  health, religion, ...); NIK, phone, e-mail and the other validated identifiers stay the
+  validators' count, so nothing is counted twice.
+- If the service does not answer within `timeout` (10 s), the bridge uses its patterns and
+  validators alone for a minute and logs it once. `check` sends a short synthetic text:
+  `[OK]   NLP service http://127.0.0.1:8333/: answered in 85 ms`.
+
 ## 8. File shares (mode B and local reports)
 
 File roots are scanned with mode B or locally with the command line. Only the folders
