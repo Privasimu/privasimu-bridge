@@ -471,6 +471,26 @@ func TestTimeoutAndOutputLimit(t *testing.T) {
 	}
 }
 
+// TestDeadlineBeforeTheToolStartsIsATimeout: on a busy host the deadline can pass before
+// the tool has started; that is a timeout, retried like one, not a broken tool. A job
+// cancelled by then stays a cancellation.
+func TestDeadlineBeforeTheToolStartsIsATimeout(t *testing.T) {
+	exe, sum := self(t)
+	tool := run{tool: config.ToolConfig{Path: exe, SHA256: sum}, name: "syft", timeout: time.Minute}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	tool.stdout = filepath.Join(t.TempDir(), "expired.out")
+	if _, err := execute(expired, tool); CodeOf(err) != CodeToolTimeout {
+		t.Fatalf("a deadline passed before the start: %v", err)
+	}
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	tool.stdout = filepath.Join(t.TempDir(), "cancelled.out")
+	if _, err := execute(cancelled, tool); err != context.Canceled {
+		t.Fatalf("a cancelled job: %v", err)
+	}
+}
+
 func errorsAs(err error, target **Error) bool {
 	e, ok := err.(*Error)
 	if ok {

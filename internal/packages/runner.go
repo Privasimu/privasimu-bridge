@@ -110,6 +110,14 @@ func execute(ctx context.Context, r run) (outcome, error) {
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = 5 * time.Second
 	if err := startLowPriority(cmd); err != nil {
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			return out, ctx.Err() // the job was cancelled or lost its lease
+		case rctx.Err() != nil:
+			// The deadline passed before the tool could start (a busy host): a timeout,
+			// retried like one that passes while the tool runs, not a broken tool.
+			return out, scanError(CodeToolTimeout, "run", r.name, rctx.Err())
+		}
 		return out, scanError(CodeToolFailed, "tool", r.name, err)
 	}
 	waitErr := cmd.Wait()
