@@ -63,8 +63,9 @@ of that server as possible:
   `pdo_mysql`, `sqlsrv`/`pdo_sqlsrv` with the Microsoft ODBC driver, `oci8` with Oracle
   Instant Client, the MongoDB extension). The Go binary is static (`CGO_ENABLED=0`) and
   carries pure-Go drivers: pgx (also for Amazon Redshift), go-sql-driver/mysql, go-mssqldb,
-  go-ora (no Oracle Instant Client) and the official MongoDB driver, and reads ClickHouse
-  over its HTTP interface with the standard library.
+  go-ora (no Oracle Instant Client) and the official MongoDB driver; ClickHouse is read over
+  its HTTP interface, and Snowflake, BigQuery, Databricks and Athena over their REST APIs,
+  with the standard library (their official libraries would add 5 to 27 MB each).
 - **The same binary on Windows Server and Linux**, as a Windows service, a systemd unit or
   a distroless container, with no runtime to patch.
 - **A smaller attack surface**: no interpreter, no extension loading, HTTP/1.1 only, a
@@ -111,7 +112,7 @@ flowchart LR
       SEC["secret store<br/>AES-256-GCM / DPAPI"]
       AU[audit log]
     end
-    DB[(PostgreSQL, MySQL, SQL Server,<br/>Oracle, MongoDB, Redshift,<br/>ClickHouse)]
+    DB[(PostgreSQL, MySQL, SQL Server,<br/>Oracle, MongoDB, Redshift,<br/>ClickHouse; cloud warehouses)]
     FS[[File shares]]
   end
   DD -- "HTTPS + X-API-Key (mode A)" --> A
@@ -180,7 +181,7 @@ Request body (what the platform sends, from `BridgeSourceTypes`):
 
 | Field | Sent for | Bridge use |
 |---|---|---|
-| `db_type` | all | `postgresql`, `mysql`, `mssql`, `oracle`; for future registry types also `mongodb`, `redshift` and `clickhouse` (the last two from configured sources only); `snowflake`, `db2`, `db2i` → 400 |
+| `db_type` | all | `postgresql`, `mysql`, `mssql`, `oracle`, `snowflake` (configured sources only); for future registry types also `mongodb`, `redshift`, `clickhouse`, `bigquery`, `databricks`, `athena` (every engine after `mongodb` from configured sources only); `db2`, `db2i` → 400 |
 | `host` | all | local credentials: match key; request credentials: target |
 | `port` | optional | request credentials only (engine default otherwise) |
 | `database` | all (db2i optional) | match key / target |
@@ -310,9 +311,10 @@ server. Negotiation keeps old and new agents and platforms compatible: the agent
 poll answer lists `source_kind:packages` (AGENT-PROTOCOL.md sections 5.2, 5.3, 6.7).
 
 **Further engines (revision 4, proposal).** Database sources of an engine beyond the five
-of revision 2 (Redshift, ClickHouse) are offered only to a platform whose poll answer lists
-`source_engine:<engine>`; an older platform would refuse the whole inventory. Until then the
-agent logs once per source that it is withheld, and scans nothing for it.
+of revision 2 (Redshift, ClickHouse, Snowflake, BigQuery, Databricks, Athena) are offered
+only to a platform whose poll answer lists `source_engine:<engine>`; an older platform would
+refuse the whole inventory. Until then the agent logs once per source that it is withheld,
+and scans nothing for it. An Athena source never announces `sampling` (catalog only).
 
 ## 7. Data minimisation
 
@@ -436,11 +438,12 @@ frontend items are in progress (branch `feat/bridge-agent-mode-b-frontend-2026-1
    it); log the bridge's error `code` from the response body for support (the message
    shown to users stays the platform's).
 8. (opt) Mode A file endpoints (`/ext/v1/...`) as an alternative to mode B for file shares.
-9. (rev 4, proposal) Further engines: a Data Discovery system type `redshift` and
-   `clickhouse` (category `data_warehouse`) in both lines, then `source_engine:redshift` and
-   `source_engine:clickhouse` in `platform_features`, inventory validation and the link
-   check (AGENT-PROTOCOL.md section 13); (opt) the same types in `BridgeSourceTypes` for
-   mode A, served by the bridge from configured sources only.
+9. (rev 4, proposal) Further engines: a Data Discovery system type for `redshift`,
+   `clickhouse`, `bigquery`, `databricks` and `athena` (`snowflake` exists; category
+   `data_warehouse`) in both lines, then `source_engine:<engine>` for each in
+   `platform_features`, inventory validation and the link check (AGENT-PROTOCOL.md section
+   13); (opt) the same types in `BridgeSourceTypes` for mode A, served by the bridge from
+   configured sources only (Snowflake already is).
 
 **Both frontends (frontend and frontend-go, identical code)**
 1. Data Discovery source form: a connection method choice for database types — direct,
@@ -482,13 +485,13 @@ code does, not what a deployment may add around it (a reverse proxy, a firewall)
 | 13 | Read-only sessions and timeouts on the databases | yes, per engine | no read-only session, no statement or lock timeout; `pool_timeout=30`, and `connect_timeout=10` in `access_scanner.py` only |
 | 14 | Indonesian identifier validators (NIK structure, NPWP, KK, BPJS, Luhn) | yes | regular expressions only: a NIK is any 16 digits, an NPWP the printed format or 9 to 15 digits (`app/core/patterns.py` 30, 49); no province, date or checksum check; `python-stdnum`, `schwifty` and `phonenumbers` are dependencies but unused in `app/`; only the SIM shape is checked (`validate_indonesian_drivers_license`) |
 | 15 | Content sampling, and where values go | optional, local only, counts out | whole tables are read in the service and rows and values go back to the caller (row 1); texts longer than 200 characters go to the separate NLP service `nlp-data-discovery` (`NLP_API_ENDPOINT`, default `http://localhost:8333/`, `nlp_service.py`) |
-| 16 | Engines | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Amazon Redshift, ClickHouse (the last two in mode B from revision 4 of the agent protocol); every engine read-only with server-side timeouts where the engine has them | drivers in `pyproject.toml`: SQLite, MySQL/MariaDB/TiDB, the PostgreSQL family (also YugabyteDB, Greenplum, openGauss), SQL Server (ODBC), Oracle, Db2 (`ibm-db-sa`), Snowflake, Redshift, BigQuery, Athena, Databricks, ClickHouse; 17 more `db_type`s (CockroachDB, Trino, Hive, Teradata, SAP HANA, …) build a URL without an installed driver and answer 500, 11 are refused by name with 400 (`app/core/database.py`); grants and access: `/v1/scan-access` (MySQL accounts and `SHOW GRANTS`), `/v1/scan-access-s3`, `/v1/scan-access-application` |
+| 16 | Engines | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Amazon Redshift, ClickHouse, Snowflake, Google BigQuery, Databricks SQL, Amazon Athena (catalog only); the engines after MongoDB in mode B from revision 4 of the agent protocol, Snowflake also in mode A; every engine read-only (session settings, a read-only token scope, GET-only requests, or least-privilege roles where the service has no such setting) with server-side timeouts where the engine has them | drivers in `pyproject.toml`: SQLite, MySQL/MariaDB/TiDB, the PostgreSQL family (also YugabyteDB, Greenplum, openGauss), SQL Server (ODBC), Oracle, Db2 (`ibm-db-sa`), Snowflake, Redshift, BigQuery, Athena, Databricks, ClickHouse; 17 more `db_type`s (CockroachDB, Trino, Hive, Teradata, SAP HANA, …) build a URL without an installed driver and answer 500, 11 are refused by name with 400 (`app/core/database.py`); grants and access: `/v1/scan-access` (MySQL accounts and `SHOW GRANTS`), `/v1/scan-access-s3`, `/v1/scan-access-application` |
 | 17 | File-share scanning: who chooses the path? | local allow-list only; `os.Root`; links and junctions skipped | no share scanning: `/v1/scan-file` takes an uploaded file (multipart `UploadFile`), `/v1/scan-remote-document` a URL or blob URL the caller supplies |
 | 18 | Parser isolation for complex formats | PDF in a child process with a timeout | none: PDF (PyPDF2), DOCX (python-docx) and XLSX (openpyxl) are parsed inside the service process (`file_scanner.py` 46, 418, 423, 439) |
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | no value is logged on purpose, but driver error texts, which can quote values, are logged and returned (row 4); a `setup_logging()` that would log SQLAlchemy statements and rows at DEBUG to `debug.log` exists but is never called (`app/logging_config.py`) |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | Docker only; the image has no `USER` line, so the service runs as root; no Windows service or systemd unit |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | `uv.lock` pins versions and the image installs with `uv sync --frozen`; `requirements.txt` leaves most packages unpinned; base image pinned by tag, `ghcr.io/astral-sh/uv:latest` unpinned; the obsolete `logging` 0.4.9.6 (2013) is a declared dependency; no vulnerability scan, SBOM or licence notice configured |
-| 22 | Tests (contract, security, minimisation) | 175 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
+| 22 | Tests (contract, security, minimisation) | 189 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | none |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | `GET /health` (status, time, version); `/docs` off unless `DOCS_ENABLED`; no configuration check or command line; English messages only |
 
@@ -497,7 +500,8 @@ the bridge can take it over:
 
 - **More engines** (the cloud warehouses, ClickHouse, Db2): only with pure-Go drivers in
   the one static binary, with the bridge's read-only sessions, timeouts and local
-  credentials. Redshift (pgx) and ClickHouse (its HTTP interface) are added; Db2 has no
+  credentials. Redshift (pgx), ClickHouse (its HTTP interface) and Snowflake, BigQuery,
+  Databricks and Athena (their REST APIs, standard library only) are added; Db2 has no
   pure-Go driver.
 - **NLP for long text** (`nlp-data-discovery`): only as an optional endpoint inside the
   client's network that the operator configures; text stays on that network and only
@@ -530,13 +534,20 @@ caller names, credentials in every request) is what the bridge leaves out by des
   `integration` test. The Linux priority and exclusion paths were vetted, not executed, on
   Windows. Release signing is wired (minisign, cosign) but the owner has not generated the
   keys yet: `release-keys/` holds placeholders and releases are unsigned until then.
-- Db2 and Db2 for i are not supported (no pure-Go driver); Snowflake is a cloud service
-  the platform can scan directly.
+- Db2 and Db2 for i are not supported (no pure-Go driver; IBM's Go driver needs cgo and the
+  CLI client).
 - ClickHouse was tested against a fake of its HTTP interface only (no ClickHouse server
   runs on Windows); the Redshift dialect ran against PostgreSQL 16 (same protocol and
   catalog tables), not against Redshift. Redshift reports no row estimates (`pg_class`
-  counts are not maintained there). Both are offered in mode B only once a platform lists
-  them (revision 4 is a proposal; neither platform line implements it yet).
+  counts are not maintained there). The engines after MongoDB are offered in mode B only
+  once a platform lists them (revision 4 is a proposal; neither platform line implements it
+  yet); Snowflake also works in mode A, which the platform already sends.
+- Snowflake, BigQuery, Databricks and Athena were tested against fakes of their REST APIs
+  (key-pair JWTs verified, AWS Signature Version 4 checked against the AWS reference
+  example), not against the services. Their read-only guarantee is the service's own where
+  it has one (BigQuery's read-only token scope) and the least-privilege role otherwise;
+  Snowflake lists at most 10 000 tables per database (a limit of SHOW); BigQuery fields
+  inside records are classified by name only; Athena is never sampled.
 - Scanned PDFs and images (OCR), legacy Office formats, encrypted documents and archives
   inside shares are counted, not read.
 - Name heuristics and the NPWP check digit (DJP does not publish the algorithm; Luhn is

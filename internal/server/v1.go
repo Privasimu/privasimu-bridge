@@ -55,11 +55,12 @@ var (
 )
 
 // engineOf maps a platform db_type to a bridge engine. The platform's registry sends
-// postgresql, mysql, mssql and oracle today; the other engines are accepted for a future
-// registry entry and served from configured sources only (requestEngine).
+// postgresql, mysql, mssql, oracle and snowflake today; the other engines are accepted for a
+// future registry entry. Every engine but the first five is served from configured sources
+// only (requestEngine).
 func engineOf(dbType string) (string, bool) {
 	switch dbType {
-	case "postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse":
+	case "postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse", "snowflake", "bigquery", "databricks", "athena":
 		return dbType, true
 	case "mariadb":
 		return "mysql", true

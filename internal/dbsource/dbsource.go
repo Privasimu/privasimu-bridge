@@ -44,6 +44,18 @@ type Target struct {
 	Dial        DialFunc
 	// MaxOpen bounds concurrent connections to this database (default 4).
 	MaxOpen int
+
+	// Cloud warehouses (see config.SourceConfig).
+	Warehouse            string
+	Role                 string
+	PrivateKey           secrets.Value
+	PrivateKeyPassphrase secrets.Value
+	Credentials          secrets.Value
+	Region               string
+	SessionToken         secrets.Value
+
+	// endpoint replaces a cloud service's public address (tests only).
+	endpoint string
 }
 
 // TLSSettings configures TLS to the database.
@@ -295,6 +307,14 @@ func Open(ctx context.Context, t Target) (Conn, error) {
 		return openRedshift(ctx, t)
 	case "clickhouse":
 		return openClickHouse(ctx, t)
+	case "snowflake":
+		return openSnowflake(ctx, t)
+	case "bigquery":
+		return openBigQuery(ctx, t)
+	case "databricks":
+		return openDatabricks(ctx, t)
+	case "athena":
+		return openAthena(ctx, t)
 	}
 	return nil, &Error{Kind: KindUnsupported, Op: "open", Cause: fmt.Errorf("engine %q is not supported", t.Engine), Safe: true}
 }
@@ -306,21 +326,24 @@ func FromSource(src *config.SourceConfig, resolve func(config.SecretRef) (secret
 		Engine: src.Engine, Host: src.Host, Port: src.Port, Database: src.Database, Username: src.Username,
 		AuthSource: src.AuthSource, Schemas: src.Schemas, ServiceName: src.ServiceName, SID: src.SID,
 		Instance: src.Instance, Timeout: src.Timeout.D(),
-		TLS: TLSSettings{Mode: src.TLS.Mode, CAFile: src.TLS.CAFile, ServerName: src.TLS.ServerName},
+		TLS:       TLSSettings{Mode: src.TLS.Mode, CAFile: src.TLS.CAFile, ServerName: src.TLS.ServerName},
+		Warehouse: src.Warehouse, Role: src.Role, Region: src.Region,
 	}
-	if src.Password.IsSet() {
-		v, err := resolve(src.Password)
-		if err != nil {
-			return Target{}, &Error{Kind: KindConfig, Op: "password", Cause: err, Safe: true}
+	for _, s := range []struct {
+		name string
+		ref  config.SecretRef
+		dst  *secrets.Value
+	}{{"password", src.Password, &t.Password}, {"uri", src.URI, &t.URI}, {"private_key", src.PrivateKey, &t.PrivateKey},
+		{"private_key_passphrase", src.PrivateKeyPassphrase, &t.PrivateKeyPassphrase},
+		{"credentials", src.Credentials, &t.Credentials}, {"session_token", src.SessionToken, &t.SessionToken}} {
+		if !s.ref.IsSet() {
+			continue
 		}
-		t.Password = v
-	}
-	if src.URI.IsSet() {
-		v, err := resolve(src.URI)
+		v, err := resolve(s.ref)
 		if err != nil {
-			return Target{}, &Error{Kind: KindConfig, Op: "uri", Cause: err, Safe: true}
+			return Target{}, &Error{Kind: KindConfig, Op: s.name, Cause: err, Safe: true}
 		}
-		t.URI = v
+		*s.dst = v
 	}
 	return t, nil
 }

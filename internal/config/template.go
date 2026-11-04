@@ -120,6 +120,7 @@ sources: []
 #  - id: core-banking
 #    label: "Core banking"
 #    engine: postgresql        # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
+#                              # | snowflake | bigquery | databricks | athena (see the install guide)
 #    host: 10.10.1.20
 #    port: 5432
 #    database: corebank
