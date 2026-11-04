@@ -12,6 +12,9 @@ import (
 
 // classifyDriver maps errors of the database drivers to a kind ("" when unknown).
 func classifyDriver(err error) string {
+	if k := classifyClickHouse(err); k != "" {
+		return k
+	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		switch {

@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,9 @@ func TestJobsAgainstRealDatabases(t *testing.T) {
 				c.Sources = []config.SourceConfig{src}
 			})
 			e.enroll()
+			if !slices.Contains(config.ProtocolEngines, engine) {
+				e.fp.setFeatures([]string{FeatureSourceEnginePrefix + engine}) // a platform of revision 4
+			}
 			e.fp.enqueue(Job{JobID: "job-test", Type: JobTestSource, SourceID: "real"})
 			e.fp.enqueue(Job{JobID: "job-scan", Type: JobScanDatabase, SourceID: "real"})
 			a, err := New(Deps{Config: e.cfg, Client: e.client, Resolver: e.resolver, Files: e.files, Log: testLogger()})

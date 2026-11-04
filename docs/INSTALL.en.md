@@ -299,6 +299,35 @@ db.createUser({ user: "privasimu_ro", pwd: passwordPrompt(), roles: [ { role: "r
 MongoDB has no schema catalog: the bridge reads up to 100 documents per collection on the
 bridge server to learn field names. It examines the values only when sampling is on.
 
+**Amazon Redshift** (provisioned or Serverless; port 5439)
+```sql
+CREATE USER privasimu_ro PASSWORD '<strong password>';
+-- Names only: the catalog is readable without more. For local sampling also:
+GRANT USAGE ON SCHEMA public TO privasimu_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO privasimu_ro;
+```
+Redshift has no read-only session setting: give this account no other privilege. The
+bridge sets `statement_timeout` for every session (the source's `timeout`) and samples
+inside `BEGIN READ ONLY` transactions. Use `tls: {mode: verify-full}`; the Amazon
+certificate authorities are in the system trust store. Redshift reports no row counts.
+
+**ClickHouse** (HTTP interface: port 8123, or 8443 with TLS)
+```sql
+CREATE USER privasimu_ro IDENTIFIED WITH sha256_password BY '<strong password>' HOST IP '<bridge-ip>';
+GRANT SHOW TABLES, SHOW COLUMNS ON crm.* TO privasimu_ro;   -- names and types
+GRANT SELECT ON crm.* TO privasimu_ro;                       -- only for local sampling
+```
+The bridge sends only `GET` requests, which ClickHouse itself makes read-only, with a
+server-side time limit (`max_execution_time`, the source's `timeout`) and, for sampling,
+a row limit. Do not give this user a profile with `readonly = 1`: it forbids those limits
+(`readonly = 2`, or no setting, is right). In ClickHouse a database is a schema: the source's
+`database` is listed, or the databases in `schemas`. Use the HTTPS port with
+`tls: {mode: verify-full}` wherever ClickHouse has a certificate.
+
+Redshift and ClickHouse sources are offered to Privasimu in mode B once Privasimu accepts
+these engines (agent protocol revision 4); until then the agent logs that it withholds
+them, and `check` tests them.
+
 ## 7. Store the passwords and define the sources
 
 Store each password in the encrypted store (the value is not shown while you type):
@@ -315,7 +344,7 @@ Then add the sources to `bridge.yaml` (every option is explained in
 sources:
   - id: core-banking
     label: "Core banking"
-    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb
+    engine: postgresql          # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
     host: 10.10.1.20
     database: corebank
     username: privasimu_ro
@@ -408,7 +437,7 @@ Remove with `privasimu-bridge service uninstall` (configuration and data are kep
 1. Open **Data Discovery** and click **Add System**.
 2. Choose the **Data source type** of the database: PostgreSQL, MySQL, Microsoft SQL
    Server or Oracle. (These are the types Privasimu can send to a bridge. MongoDB through
-   the bridge needs mode B.)
+   the bridge needs mode B, and so do Redshift and ClickHouse.)
 3. Under **Credentials & connection** fill the standard fields:
    - **Host**: the source's `match.host` (for example `corebank`), or its `host` when you
      set no alias;

@@ -16,9 +16,9 @@
 //	                              optional: an account that may write, to show that the
 //	                              bridge's sessions stay read-only even then
 //
-// <ENGINE> is POSTGRESQL, MYSQL (MySQL and MariaDB), MSSQL, ORACLE or MONGODB. The
-// fixtures in internal/dbsource/testdata/integration create the table "customers" with
-// the synthetic values in FixtureValues.
+// <ENGINE> is POSTGRESQL, MYSQL (MySQL and MariaDB), MSSQL, ORACLE, MONGODB, REDSHIFT or
+// CLICKHOUSE. The fixtures in internal/dbsource/testdata/integration create the table
+// "customers" with the synthetic values in FixtureValues.
 package itenv
 
 import (

@@ -391,11 +391,15 @@ func (c *Config) applyDefaults() {
 		if src.Engine == "mariadb" {
 			src.Engine = "mysql"
 		}
-		if src.Port == 0 {
-			src.Port = DefaultPort(src.Engine)
-		}
 		if src.TLS.Mode == "" {
 			src.TLS.Mode = defaultDBTLS(src.Engine)
+		}
+		if src.Port == 0 {
+			src.Port = DefaultPort(src.Engine)
+			// ClickHouse serves HTTPS on its own port.
+			if src.Engine == "clickhouse" && src.TLS.Mode != DBTLSDisable {
+				src.Port = ClickHouseTLSPort
+			}
 		}
 		if src.Timeout <= 0 {
 			src.Timeout = Duration(20e9)
@@ -477,17 +481,26 @@ func DefaultPort(engine string) int {
 		return 1521
 	case "mongodb":
 		return 27017
+	case "redshift":
+		return 5439
+	case "clickhouse":
+		return 8123
 	}
 	return 0
 }
 
+// ClickHouseTLSPort is the default HTTPS port of ClickHouse, used when a ClickHouse
+// source has a TLS mode and no port.
+const ClickHouseTLSPort = 8443
+
 // defaultDBTLS is the TLS mode used when a source does not set one: opportunistic
 // encryption where the engine negotiates TLS on its normal port (the same default as
-// libpq), plain connections where TLS needs a separate listener (Oracle TCPS) or a URI
-// option (MongoDB). verify-full is recommended wherever the database has a certificate.
+// libpq), plain connections where TLS needs a separate listener (Oracle TCPS, ClickHouse
+// HTTPS) or a URI option (MongoDB). verify-full is recommended wherever the database has a
+// certificate.
 func defaultDBTLS(engine string) string {
 	switch engine {
-	case "postgresql", "mysql", "mssql":
+	case "postgresql", "mysql", "mssql", "redshift":
 		return DBTLSPrefer
 	}
 	return DBTLSDisable

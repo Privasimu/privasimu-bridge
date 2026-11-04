@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -71,10 +72,13 @@ type Agent struct {
 	sleep func(ctx context.Context, d time.Duration) bool
 	// minRenew is the shortest interval between lease renewals.
 	minRenew time.Duration
-	// packagesFeature is whether the last poll answer listed source_kind:packages: only
-	// then does the inventory include packages targets (an older platform refuses the whole
-	// inventory on an unknown kind).
-	packagesFeature bool
+	// features are the platform_features of the last poll answer that shape the inventory
+	// (source_kind:packages and source_engine:*): packages targets and database sources of
+	// engines beyond revision 2 are only sent to a platform that lists them, because an
+	// older platform refuses the whole inventory on an unknown kind or engine.
+	features []string
+	// withheld are the sources already reported in the log as not sent to this platform.
+	withheld map[string]bool
 }
 
 // State is what enrollment leaves in the state directory.
@@ -129,7 +133,7 @@ var ErrNotEnrolled = errors.New("the agent is not enrolled")
 func New(d Deps) (*Agent, error) {
 	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, packages: d.Packages, audit: d.Audit, log: d.Log,
 		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
-		sleep: sleepCtx, minRenew: 5 * time.Second}
+		withheld: map[string]bool{}, sleep: sleepCtx, minRenew: 5 * time.Second}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
@@ -196,14 +200,19 @@ func wireVersion(v string) string {
 	return string(b)
 }
 
-// Inventory lists what the agent may scan: database sources, usable file roots and, when
-// withPackages is true (the platform listed source_kind:packages), packages targets. The
-// list is never null: both platform lines refuse "sources": null. The digest is computed
-// over exactly what is sent, so it changes when packages targets start to be sent.
-func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, withPackages bool) ([]Source, string) {
+// Inventory lists what the agent may scan for a platform with the given platform_features:
+// database sources (those of an engine beyond revision 2 only when the platform lists
+// "source_engine:<engine>"), usable file roots and, when the platform lists
+// source_kind:packages, packages targets. The list is never null: both platform lines
+// refuse "sources": null. The digest is computed over exactly what is sent, so it changes
+// when the platform starts (or stops) accepting a kind or an engine.
+func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, features []string) ([]Source, string) {
 	out := []Source{}
 	for i := range cfg.Sources {
 		src := &cfg.Sources[i]
+		if !engineAccepted(src.Engine, features) {
+			continue
+		}
 		caps := []string{}
 		if cfg.SamplingFor(src).On() {
 			caps = append(caps, "sampling")
@@ -224,13 +233,44 @@ func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, with
 			out = append(out, Source{ID: r.ID, Kind: "files", Engine: "filesystem", Label: labelOf(r.Label, r.ID), Description: desc, Capabilities: caps})
 		}
 	}
-	if withPackages {
+	if slices.Contains(features, FeatureSourceKindPackages) {
 		out = append(out, packageSources(cfg, pk)...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	raw, _ := json.Marshal(out)
 	sum := sha256.Sum256(raw)
 	return out, "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// engineAccepted reports whether a platform with these features accepts inventory entries
+// of an engine: the engines of revision 2 always, the others when it lists
+// "source_engine:<engine>".
+func engineAccepted(engine string, features []string) bool {
+	return slices.Contains(config.ProtocolEngines, engine) || slices.Contains(features, FeatureSourceEnginePrefix+engine)
+}
+
+// Withheld lists the database sources a platform with these features does not accept yet
+// (their engine is beyond revision 2 and not in its platform_features).
+func Withheld(cfg *config.Config, features []string) []string {
+	var out []string
+	for _, src := range cfg.Sources {
+		if !engineAccepted(src.Engine, features) {
+			out = append(out, src.ID)
+		}
+	}
+	return out
+}
+
+// inventoryFeatures keeps the platform features that shape the inventory, sorted.
+func inventoryFeatures(all []string) []string {
+	out := []string{}
+	for _, f := range all {
+		if f == FeatureSourceKindPackages || strings.HasPrefix(f, FeatureSourceEnginePrefix) {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // packageSources describes the packages targets: kind packages, the target kind as the
@@ -308,9 +348,9 @@ func (a *Agent) Run(ctx context.Context) error {
 // before the next poll (0 = use backoff) and whether the poll succeeded.
 func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duration, bool) {
 	a.mu.Lock()
-	withPackages := a.packagesFeature
+	features := a.features
 	a.mu.Unlock()
-	sources, digest := Inventory(a.cfg, a.files, a.packages, withPackages)
+	sources, digest := Inventory(a.cfg, a.files, a.packages, features)
 	a.mu.Lock()
 	running := make([]string, 0, len(a.running))
 	for id := range a.running {
@@ -336,16 +376,18 @@ func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duratio
 	if unsaved != "" {
 		a.storeToken(unsaved)
 	}
-	// The inventory follows what this platform accepts: packages targets only once it
-	// lists source_kind:packages (and no longer when a downgraded platform stops listing it).
+	// The inventory follows what this platform accepts: packages targets and further
+	// engines only once it lists them (and no longer when a downgraded platform stops).
 	featureChanged := false
-	if now := resp.HasFeature(FeatureSourceKindPackages); now != withPackages {
+	if now := inventoryFeatures(resp.PlatformFeatures); !slices.Equal(now, features) {
 		a.mu.Lock()
-		a.packagesFeature = now
+		a.features = now
 		a.mu.Unlock()
 		featureChanged = true
 		sources, digest = Inventory(a.cfg, a.files, a.packages, now)
+		features = now
 	}
+	a.logWithheld(features)
 	if resp.InventoryRequested || !*inventorySent || featureChanged {
 		ictx, cancel := context.WithTimeout(ctx, requestTimeout)
 		if err := a.client.PutSources(ictx, SourcesRequest{SourcesDigest: digest, Sources: sources}); err != nil {
@@ -363,6 +405,25 @@ func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duratio
 	}
 	a.writeStatus()
 	return time.Duration(resp.NextPollSeconds) * time.Second, true
+}
+
+// logWithheld tells the operator, once per source, that a database source is not offered
+// to the platform because the platform does not accept its engine yet.
+func (a *Agent) logWithheld(features []string) {
+	for _, id := range Withheld(a.cfg, features) {
+		a.mu.Lock()
+		seen := a.withheld[id]
+		a.withheld[id] = true
+		a.mu.Unlock()
+		if !seen {
+			engine := ""
+			if src, ok := a.cfg.Source(id); ok {
+				engine = src.Engine
+			}
+			a.log.Warn("source not offered to the platform: it does not accept this engine yet (agent protocol revision 4)",
+				"source", id, "engine", engine)
+		}
+	}
 }
 
 func (a *Agent) pollFailed(err error) time.Duration {

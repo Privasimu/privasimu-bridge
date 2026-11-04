@@ -74,21 +74,71 @@ func (c *sqlConn) ctx(ctx context.Context) (context.Context, context.CancelFunc)
 }
 
 // schemasFor returns the schemas a listing covers.
-func (c *sqlConn) schemasFor(schema string) ([]string, error) {
+func (c *sqlConn) schemasFor(schema string) ([]string, error) { return listingSchemas(c.t, schema) }
+
+func (c *sqlConn) ref(schema, name, requested string) string {
+	return tableRef(c.schema, schema, name, requested)
+}
+
+// listingSchemas returns the schemas a listing covers: the requested one when the
+// target's allow-list has it, else the allow-list (empty = every schema the engine lists
+// by default).
+func listingSchemas(t Target, schema string) ([]string, error) {
 	if schema != "" {
-		if !c.t.schemaAllowed(schema) {
+		if !t.schemaAllowed(schema) {
 			return nil, &Error{Kind: KindPermission, Op: "list tables", Safe: true}
 		}
 		return []string{schema}, nil
 	}
-	return c.t.Schemas, nil
+	return t.Schemas, nil
 }
 
-func (c *sqlConn) ref(schema, name, requested string) string {
-	if requested != "" || strings.EqualFold(schema, c.schema) {
+// tableRef is the name reported to the platform: bare in the default or the requested
+// schema, "schema.name" otherwise.
+func tableRef(defaultSchema, schema, name, requested string) string {
+	if requested != "" || strings.EqualFold(schema, defaultSchema) {
 		return name
 	}
 	return schema + "." + name
+}
+
+// sortTables orders a listing: tables of the default schema first, then the other
+// schemas by name, each by table name.
+func sortTables(out []Table, defaultSchema string) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Schema != out[j].Schema {
+			if strings.EqualFold(out[i].Schema, defaultSchema) != strings.EqualFold(out[j].Schema, defaultSchema) {
+				return strings.EqualFold(out[i].Schema, defaultSchema)
+			}
+			return out[i].Schema < out[j].Schema
+		}
+		return out[i].Name < out[j].Name
+	})
+}
+
+// tableCandidate is a (schema, name) pair a reported name may stand for.
+type tableCandidate struct{ schema, name string }
+
+// lookupCandidates lists what a name reported by ListTables (or a bare name in schema) may
+// mean, most likely first; candidates outside the allow-list are left out.
+func lookupCandidates(t Target, defaultSchema, ref, schema string) []tableCandidate {
+	var cands []tableCandidate
+	switch {
+	case schema != "":
+		cands = []tableCandidate{{schema, ref}}
+	case strings.Contains(ref, "."):
+		s, n, _ := strings.Cut(ref, ".")
+		cands = []tableCandidate{{defaultSchema, ref}, {s, n}}
+	default:
+		cands = []tableCandidate{{defaultSchema, ref}}
+	}
+	out := cands[:0]
+	for _, c := range cands {
+		if c.schema != "" && c.name != "" && t.schemaAllowed(c.schema) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (c *sqlConn) ListTables(ctx context.Context, schema string) ([]Table, error) {
@@ -124,16 +174,7 @@ func (c *sqlConn) ListTables(ctx context.Context, schema string) ([]Table, error
 	if err := rows.Err(); err != nil {
 		return nil, wrap("list tables", err, true)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Schema != out[j].Schema {
-			// Tables of the default schema first, then the others by name.
-			if strings.EqualFold(out[i].Schema, c.schema) != strings.EqualFold(out[j].Schema, c.schema) {
-				return strings.EqualFold(out[i].Schema, c.schema)
-			}
-			return out[i].Schema < out[j].Schema
-		}
-		return out[i].Name < out[j].Name
-	})
+	sortTables(out, c.schema)
 	return out, nil
 }
 
@@ -141,23 +182,9 @@ func (c *sqlConn) FindTable(ctx context.Context, ref, schema string) (Table, boo
 	if !validName(ref) {
 		return Table{}, false, nil
 	}
-	type candidate struct{ schema, name string }
-	var cands []candidate
-	switch {
-	case schema != "":
-		cands = []candidate{{schema, ref}}
-	case strings.Contains(ref, "."):
-		s, n, _ := strings.Cut(ref, ".")
-		cands = []candidate{{c.schema, ref}, {s, n}}
-	default:
-		cands = []candidate{{c.schema, ref}}
-	}
 	qctx, cancel := c.ctx(ctx)
 	defer cancel()
-	for _, cand := range cands {
-		if cand.schema == "" || cand.name == "" || !c.t.schemaAllowed(cand.schema) {
-			continue
-		}
+	for _, cand := range lookupCandidates(c.t, c.schema, ref, schema) {
 		query, args := c.d.tableQuery(cand.schema, cand.name)
 		var s, n string
 		var est sql.NullFloat64

@@ -26,7 +26,12 @@ var (
 )
 
 // Engines lists the database engines the bridge can scan.
-var Engines = []string{"postgresql", "mysql", "mssql", "oracle", "mongodb"}
+var Engines = []string{"postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse"}
+
+// ProtocolEngines are the engines every platform of agent protocol revision 2 or 3 accepts
+// in an inventory. The others are sent only to a platform whose poll answer lists
+// "source_engine:<engine>" (revision 4).
+var ProtocolEngines = []string{"postgresql", "mysql", "mssql", "oracle", "mongodb"}
 
 func knownEngine(e string) bool {
 	for _, x := range Engines {
@@ -151,7 +156,7 @@ func (c *Config) validateSource(p *problems, i int) {
 		p.add("config.uri_mongo_only", at+".uri")
 	}
 	switch s.Engine {
-	case "postgresql", "mysql", "mongodb":
+	case "postgresql", "mysql", "mongodb", "redshift", "clickhouse":
 		if !identifierPattern.MatchString(s.Database) {
 			p.add("config.database", at+".database")
 		}

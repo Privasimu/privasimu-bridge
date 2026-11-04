@@ -645,10 +645,10 @@ func TestInventoryWithoutLabelsOrSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Sources[0].Label = ""
-	if list, _ := Inventory(cfg, nil, nil, false); len(list) != 1 || list[0].Label != "crm" {
+	if list, _ := Inventory(cfg, nil, nil, nil); len(list) != 1 || list[0].Label != "crm" {
 		t.Fatalf("%+v", list)
 	}
-	empty, digest := Inventory(&config.Config{}, nil, nil, true)
+	empty, digest := Inventory(&config.Config{}, nil, nil, []string{FeatureSourceKindPackages})
 	raw, _ := json.Marshal(SourcesRequest{SourcesDigest: digest, Sources: empty})
 	if !bytes.Contains(raw, []byte(`"sources":[]`)) {
 		t.Fatalf("%s", raw)
@@ -751,7 +751,7 @@ func TestPlatformTextRule(t *testing.T) {
 		"a\xffb":                 false,
 	}
 	for label, ok := range labels {
-		if got := validInventory(inventory(label, nil, false), false); got != ok {
+		if got := validInventory(inventory(label, nil, false), nil); got != ok {
 			t.Errorf("label %q: accepted %t, want %t", label, got, ok)
 		}
 	}
@@ -760,11 +760,11 @@ func TestPlatformTextRule(t *testing.T) {
 		ok    bool
 	}{{nil, true}, {"", true}, {strings.Repeat("x", 512), true}, {strings.Repeat("x", 513), false}, {"a\u0001", false}, {7, false}}
 	for _, d := range descriptions {
-		if got := validInventory(inventory("CRM", d.value, true), false); got != d.ok {
+		if got := validInventory(inventory("CRM", d.value, true), nil); got != d.ok {
 			t.Errorf("description %v: accepted %t, want %t", d.value, got, d.ok)
 		}
 	}
-	if validInventory(map[string]any{"sources_digest": "sha256:" + strings.Repeat("0", 64), "sources": nil}, true) {
+	if validInventory(map[string]any{"sources_digest": "sha256:" + strings.Repeat("0", 64), "sources": nil}, []string{FeatureSourceKindPackages}) {
 		t.Error(`"sources": null must be refused`)
 	}
 }
