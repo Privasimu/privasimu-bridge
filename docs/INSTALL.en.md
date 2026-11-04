@@ -259,6 +259,11 @@ Allow the bridge server in `pg_hba.conf` (`hostssl corebank privasimu_ro <bridge
 CREATE USER 'privasimu_ro'@'<bridge-ip>' IDENTIFIED BY '<strong password>';
 GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'<bridge-ip>';
 ```
+Every session of the bridge is read-only (`SET SESSION TRANSACTION READ ONLY`), so even an
+account with more rights cannot write through it, and the server itself stops a statement
+after the source's `timeout` (`max_execution_time` on MySQL 5.7.8+, `max_statement_time`
+on MariaDB 10.1+); a query waits at most 5 seconds behind a metadata lock
+(`lock_wait_timeout`).
 
 **Microsoft SQL Server**
 ```sql

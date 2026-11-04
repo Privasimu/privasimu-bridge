@@ -496,7 +496,7 @@ func (a *Agent) testRoot(id string) (TestResult, error) {
 		return TestResult{}, failure("files", FailFileRoot, "open", false)
 	}
 	_, err = dir.ReadDir(1)
-	dir.Close()
+	_ = dir.Close()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return TestResult{}, failure("files", FailFileRoot, "read", false)
 	}

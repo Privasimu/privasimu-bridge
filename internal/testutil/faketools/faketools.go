@@ -70,14 +70,16 @@ func Main() bool {
 	if tool == "" {
 		return false
 	}
+	// HOME is the temporary directory the test gave the child process (the agent points
+	// HOME below its state directory); only the fixed file names below it are used.
 	home := os.Getenv("HOME")
-	if f, err := os.OpenFile(filepath.Join(home, CallsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+	if f, err := os.OpenFile(filepath.Join(home, CallsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil { // #nosec G304 G703 -- test helper, see above
 		raw, _ := json.Marshal(Call{Tool: tool, Args: os.Args[1:], Env: os.Environ()})
 		_, _ = f.Write(append(raw, '\n'))
-		f.Close()
+		_ = f.Close()
 	}
 	var ctl Control
-	if raw, err := os.ReadFile(filepath.Join(home, ControlFile)); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(home, ControlFile)); err == nil { // #nosec G304 G703 -- test helper, see above
 		_ = json.Unmarshal(raw, &ctl)
 	}
 	b := ctl[tool]
@@ -118,7 +120,7 @@ func Write(home string, c Control) error {
 
 // Calls reads the recorded invocations below home.
 func Calls(home string) []Call {
-	raw, err := os.ReadFile(filepath.Join(home, CallsFile))
+	raw, err := os.ReadFile(filepath.Join(home, CallsFile)) // #nosec G304 -- the test's own temporary directory
 	if err != nil {
 		return nil
 	}

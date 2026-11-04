@@ -42,8 +42,10 @@ func dpapi(data []byte, seal bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
+	// out.Data and out.Size describe the buffer CryptUnprotectData allocated with LocalAlloc:
+	// it is copied once and freed.
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data))) // #nosec G103 -- the documented way to free a DPAPI buffer
 	result := make([]byte, out.Size)
-	copy(result, unsafe.Slice(out.Data, out.Size))
+	copy(result, unsafe.Slice(out.Data, out.Size)) // #nosec G103 -- bounded by out.Size from DPAPI
 	return result, nil
 }

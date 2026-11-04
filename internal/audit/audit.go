@@ -98,7 +98,7 @@ func (l *Logger) open() error {
 	}
 	st, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	l.f, l.size = f, st.Size()

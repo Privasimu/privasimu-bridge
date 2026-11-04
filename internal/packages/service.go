@@ -429,7 +429,7 @@ func (s *Service) match(ctx context.Context, matcher, sbomPath, work, home strin
 		env: childEnv(home, work, env...), stdout: versionOut, timeout: time.Minute}); err == nil {
 		if f, err := os.Open(versionOut); err == nil { // #nosec G304 -- inside the private work directory
 			mr.version, mr.dbBuiltAt = readTrivyVersion(f)
-			f.Close()
+			_ = f.Close()
 		}
 	}
 	return mr, nil
