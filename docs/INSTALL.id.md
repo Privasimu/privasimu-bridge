@@ -267,6 +267,11 @@ Izinkan server bridge di `pg_hba.conf` (`hostssl corebank privasimu_ro <ip-bridg
 CREATE USER 'privasimu_ro'@'<ip-bridge>' IDENTIFIED BY '<kata sandi kuat>';
 GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'<ip-bridge>';
 ```
+Setiap sesi bridge bersifat hanya-baca (`SET SESSION TRANSACTION READ ONLY`), sehingga akun
+dengan hak lebih pun tidak dapat menulis lewat bridge, dan server sendiri menghentikan
+pernyataan setelah `timeout` sumber (`max_execution_time` di MySQL 5.7.8+,
+`max_statement_time` di MariaDB 10.1+); kueri menunggu paling lama 5 detik di belakang kunci
+metadata (`lock_wait_timeout`).
 
 **Microsoft SQL Server**
 ```sql
