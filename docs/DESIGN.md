@@ -2,7 +2,8 @@
 
 Status: 0.1.0-dev, 1 November 2026. This repository is a new, standalone bridge for
 Privasimu Data Discovery. It was written without access to the Privasimu team's existing
-bridge service ("api-data-discovery"); section 13 is a checklist for comparing the two.
+bridge service ("api-data-discovery"); section 13 compares the two, from a review of that
+service's code at commit e267719 (4 November 2026).
 
 What is implemented and tested is stated as such. Mode B and file-share scanning are
 implemented on the platform side too, in both Privasimu Nexus lines (branch
@@ -449,35 +450,52 @@ frontend items are in progress (branch `feat/bridge-agent-mode-b-frontend-2026-1
 
 ## 13. Comparison checklist (against the Privasimu "api-data-discovery" bridge)
 
-Fill the right column after reviewing the other repository. Inferences about the other
-service come only from the platform's tests and are marked as such.
+The right column is reviewed from the code of api-data-discovery at e267719 (4 November
+2026), a FastAPI service; file names are paths in that repository. It records what the
+code does, not what a deployment may add around it (a reverse proxy, a firewall).
 
 | # | Question | privasimu-bridge (this repository) | api-data-discovery |
 |---|---|---|---|
-| 1 | Endpoints that return rows, samples or file content? | none; requests for such paths answer 404 and are audited | platform code says scan-table, scan-database and scan-file exist and return rows or raw values |
-| 2 | Contract v1 compatible (paths, shapes, `tables_scanned`, `table` echo)? | yes, replayed from both platform clients | yes (it defines contract v1) |
-| 3 | Values in column responses? | none; keys are labels and counts | platform fakes show `type`, `pii_category`, `pdp_category`, `impact` (check for values) |
-| 4 | Error body format | `{"status":"error","code","message"}` | platform fakes use `{"detail": …}` (FastAPI style; likely Python) |
-| 5 | Runtime to install on the client server | one static binary | check: Python, packages, ODBC drivers (`odbc_driver` field), Oracle client |
-| 6 | TLS terminated by the service? Minimum version? Certificate reload? | yes or via a proxy; 1.2+; reload without restart | ? |
-| 7 | API key storage and comparison | SHA-256 at rest, constant time, ids, expiry, revocation, lockout | ? |
-| 8 | Rate and concurrency limits | per address, global, per source; 422 for credential errors | ? |
-| 9 | Inbound port required? | mode A yes; mode B no | ? |
-| 10 | Client IP allow-list | `allowed_clients`, before the TLS handshake | ? |
-| 11 | Where database passwords live | local secret store by default; platform-supplied only with `credentials: request` | platform sends them on every call |
-| 12 | Can the platform make it connect anywhere? | no: local sources, or `allowed_targets` with pinned resolution and metadata blocked | ? |
-| 13 | Read-only sessions and timeouts on the databases | yes, per engine | ? |
-| 14 | Indonesian identifier validators (NIK structure, NPWP, KK, BPJS, Luhn) | yes | ? |
-| 15 | Content sampling, and where values go | optional, local only, counts out | ? |
-| 16 | Engines | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB | platform registry: PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, Db2, Db2 for i (+ fields hinting at BigQuery, Athena, Databricks) |
-| 17 | File-share scanning: who chooses the path? | local allow-list only; `os.Root`; links and junctions skipped | `scan-file` exists (check whether the caller supplies the path) |
-| 18 | Parser isolation for complex formats | PDF in a child process with a timeout | ? |
-| 19 | Logging of values or passwords | none (typed audit, redacted secrets) | ? |
-| 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | ? |
-| 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | ? |
-| 22 | Tests (contract, security, minimisation) | 126 test functions (138 with subtests, many table-driven), incl. both platform clients and a fake platform with both lines' field rules | ? |
-| 23 | Outbound-only mode | mode B (agent and both platform lines) | ? |
-| 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | ? |
+| 1 | Endpoints that return rows, samples or file content? | none; requests for such paths answer 404 and are audited | yes. `POST /v1/scan-table` and `/v1/scan-database` run `SELECT * FROM {table_name}` without a row limit and return every row with a finding (`row`) together with each match's `value` (`app/services/db_scanner.py` 294–366, the same in `db_scanner_with_schema.py`); `/v1/scan-file` and `/v1/scan-remote-document` return each match's `value` with 50 characters of context on each side (`file_scanner.py`, `nlp_service.py`); `/v1/scan-access-application` queries the application's `users`, `roles`, `permissions` and `user_roles` tables (`access_scanner.py`) |
+| 2 | Contract v1 compatible (paths, shapes, `tables_scanned`, `table` echo)? | yes, replayed from both platform clients | yes, it defines contract v1: `/v1/name-database-tabels` (`app/api/endpoints/scan.py`) and `/v2/scan-table-columns` (`scan_with_schema.py`); `analysis_summary` holds `total_columns` and `pii_columns`; pinned by `tests/test_bridge_endpoint_contract.py` |
+| 3 | Values in column responses? | none; keys are labels and counts | none in `/v2/scan-table-columns`: `column_name`, `is_pii`, `is_pdp`, `type`, `pii_category`, `pdp_category`, `impact`, from the column name only (`pii_detector.py` `detect_pii_in_column_name`); the endpoints of row 1 return values |
+| 4 | Error body format | `{"status":"error","code","message"}` | `{"detail": "…"}` (FastAPI `HTTPException`); many 500 bodies carry the driver's error text (`detail=str(e)`, for example `db_scanner.py` 385, 392, 429) |
+| 5 | Runtime to install on the client server | one static binary | Python 3.12 (`python:3.12.7-slim-bullseye`) with FastAPI and uvicorn; 30 direct dependencies, 139 packages in `uv.lock` with the development tools, native wheels among them (psycopg2-binary, pyodbc, ibm-db); unixODBC and Microsoft ODBC Driver 18 for SQL Server installed in the image (`Dockerfile`); Oracle in thin mode (`oracledb`, no Instant Client) |
+| 6 | TLS terminated by the service? Minimum version? Certificate reload? | yes or via a proxy; 1.2+; reload without restart | no: uvicorn serves plain HTTP on 0.0.0.0 (port 8000; `Dockerfile` `CMD`, `docker-compose.yml`); TLS only from a proxy in front |
+| 7 | API key storage and comparison | SHA-256 at rest, constant time, ids, expiry, revocation, lockout | one shared `API_KEY` in clear text in the environment or `.env`, sent as `X-API-Key` and compared with `secrets.compare_digest`; fails closed when unset; `/health` stays open; no key ids, expiry, revocation or lockout (`app/core/security.py`) |
+| 8 | Rate and concurrency limits | per address, global, per source; 422 for credential errors | none found; every call builds a new engine with `pool_size=5` and `max_overflow=10`; a wrong database password answers 500, like other database errors |
+| 9 | Inbound port required? | mode A yes; mode B no | yes (8000/tcp) |
+| 10 | Client IP allow-list | `allowed_clients`, before the TLS handshake | none in the service |
+| 11 | Where database passwords live | local secret store by default; platform-supplied only with `credentials: request` | sent by the platform in every request body (`DBConfig.user`, `password`; S3 keys in the body of `/v1/scan-access-s3`) |
+| 12 | Can the platform make it connect anywhere? | no: local sources, or `allowed_targets` with pinned resolution and metadata blocked | yes: it connects to any host the request names (README "Authentication", `app/core/security.py` docstring); no target allow-list and no private or metadata address check; with `db_type: sqlite` the request's `database` is opened as a file path on the service host (`app/core/database.py` `_build_db_url`); `/v1/scan-remote-document` downloads any URL with aiohttp (redirects followed by default) and, when the direct download is refused, retries with boto3 ambient credentials, `DefaultAzureCredential` or `DROPBOX_ACCESS_TOKEN` (`document_scanner.py` `_download_from_s3`, `_download_from_azure_blob`, `_download_from_dropbox`) |
+| 13 | Read-only sessions and timeouts on the databases | yes, per engine | no read-only session, no statement or lock timeout; `pool_timeout=30`, and `connect_timeout=10` in `access_scanner.py` only |
+| 14 | Indonesian identifier validators (NIK structure, NPWP, KK, BPJS, Luhn) | yes | regular expressions only: a NIK is any 16 digits, an NPWP the printed format or 9 to 15 digits (`app/core/patterns.py` 30, 49); no province, date or checksum check; `python-stdnum`, `schwifty` and `phonenumbers` are dependencies but unused in `app/`; only the SIM shape is checked (`validate_indonesian_drivers_license`) |
+| 15 | Content sampling, and where values go | optional, local only, counts out | whole tables are read in the service and rows and values go back to the caller (row 1); texts longer than 200 characters go to the separate NLP service `nlp-data-discovery` (`NLP_API_ENDPOINT`, default `http://localhost:8333/`, `nlp_service.py`) |
+| 16 | Engines | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB | drivers in `pyproject.toml`: SQLite, MySQL/MariaDB/TiDB, the PostgreSQL family (also YugabyteDB, Greenplum, openGauss), SQL Server (ODBC), Oracle, Db2 (`ibm-db-sa`), Snowflake, Redshift, BigQuery, Athena, Databricks, ClickHouse; 17 more `db_type`s (CockroachDB, Trino, Hive, Teradata, SAP HANA, …) build a URL without an installed driver and answer 500, 11 are refused by name with 400 (`app/core/database.py`); grants and access: `/v1/scan-access` (MySQL accounts and `SHOW GRANTS`), `/v1/scan-access-s3`, `/v1/scan-access-application` |
+| 17 | File-share scanning: who chooses the path? | local allow-list only; `os.Root`; links and junctions skipped | no share scanning: `/v1/scan-file` takes an uploaded file (multipart `UploadFile`), `/v1/scan-remote-document` a URL or blob URL the caller supplies |
+| 18 | Parser isolation for complex formats | PDF in a child process with a timeout | none: PDF (PyPDF2), DOCX (python-docx) and XLSX (openpyxl) are parsed inside the service process (`file_scanner.py` 46, 418, 423, 439) |
+| 19 | Logging of values or passwords | none (typed audit, redacted secrets) | no value is logged on purpose, but driver error texts, which can quote values, are logged and returned (row 4); a `setup_logging()` that would log SQLAlchemy statements and rows at DEBUG to `debug.log` exists but is never called (`app/logging_config.py`) |
+| 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | Docker only; the image has no `USER` line, so the service runs as root; no Windows service or systemd unit |
+| 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | `uv.lock` pins versions and the image installs with `uv sync --frozen`; `requirements.txt` leaves most packages unpinned; base image pinned by tag, `ghcr.io/astral-sh/uv:latest` unpinned; the obsolete `logging` 0.4.9.6 (2013) is a declared dependency; no vulnerability scan, SBOM or licence notice configured |
+| 22 | Tests (contract, security, minimisation) | 155 test functions (2 of them integration tests behind a build tag), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
+| 23 | Outbound-only mode | mode B (agent and both platform lines) | none |
+| 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | `GET /health` (status, time, version); `/docs` off unless `DOCS_ENABLED`; no configuration check or command line; English messages only |
+
+What api-data-discovery covers that the bridge does not, and the condition under which
+the bridge can take it over:
+
+- **More engines** (the cloud warehouses, ClickHouse, Db2): only with pure-Go drivers in
+  the one static binary, with the bridge's read-only sessions, timeouts and local
+  credentials.
+- **NLP for long text** (`nlp-data-discovery`): only as an optional endpoint inside the
+  client's network that the operator configures; text stays on that network and only
+  counts leave.
+- **Grants and access** (`scan-access`): only as counts and role names for the tables that
+  hold personal data, never account names or rows of application user tables.
+
+The rest of what it does (rows and values in answers, documents fetched from URLs the
+caller names, credentials in every request) is what the bridge leaves out by design
+(section 7).
 
 ## 14. Known gaps
 
