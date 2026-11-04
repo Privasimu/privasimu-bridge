@@ -117,6 +117,9 @@ func (c *Config) Validate() error {
 			seen(fmt.Sprintf("sources[%d]", i), s.ID)
 		}
 	}
+	if m := c.AccessInventory.RoleNames; m != RoleNamesHashed && m != RoleNamesPlain {
+		p.add("config.role_names", "access_inventory.role_names")
+	}
 	if m := c.Files.ReportPaths; m != PathsHashed && m != PathsRelative {
 		p.add("config.report_paths", "files.report_paths")
 	}

@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/privasimu/bridge/internal/config"
+	"github.com/privasimu/bridge/internal/dbsource"
 	"github.com/privasimu/bridge/internal/i18n"
+	"github.com/privasimu/bridge/internal/secrets"
 )
 
 type result struct {
@@ -138,3 +140,34 @@ func TestCheckVerifiesPackageScanners(t *testing.T) {
 }
 
 func quoteYAML(s string) string { return strconv.Quote(s) }
+
+// TestAccessRoleID: the operator matches a role id shown in Privasimu to a role name on
+// this server; the ids come from the install's key, as the agent and the server send them.
+func TestAccessRoleID(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "bridge.yaml")
+	if err := os.WriteFile(cfgPath, []byte("state_dir: state\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, "", "--config", cfgPath, "access", "role-id", "crm_reader", "budi")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	key, err := secrets.LoadOrCreateIDKey(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := dbsource.HashedRoleNames(key)
+	if want := ids.Name("crm_reader") + "  crm_reader\n" + ids.Name("budi") + "  budi\n"; r.stdout != want {
+		t.Fatalf("%q, want %q", r.stdout, want)
+	}
+	if r := run(t, "", "--config", cfgPath, "access", "role-id"); r.code != 2 {
+		t.Fatalf("a role name is required: %+v", r)
+	}
+	if err := os.WriteFile(cfgPath, []byte("state_dir: state\naccess_inventory: {role_names: plain}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(t, "", "--config", cfgPath, "access", "role-id", "crm_reader"); r.code != 0 || !strings.Contains(r.stdout, "plain") || strings.Contains(r.stdout, "r_") {
+		t.Fatalf("plain names have no ids: %+v", r)
+	}
+}

@@ -32,9 +32,11 @@ type DBOptions struct {
 	Entities       detect.EntityCounter
 	EntityMinChars int
 	EntityMaxBytes int
-	// Access also reads who can read each table that holds personal data (counts and role
-	// names only; sources with access_inventory).
-	Access bool
+	// Access also reads who can read each table that holds personal data (counts and group
+	// roles only; sources with access_inventory); RoleNames decides what is reported for each
+	// group role (its zero value reports none).
+	Access    bool
+	RoleNames dbsource.RoleNaming
 }
 
 func (o DBOptions) maxTables() int {
@@ -183,7 +185,7 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 	}
 	if pii, _ := res.PIIColumns(); o.Access && pii > 0 {
 		if ar, ok := c.(dbsource.AccessReader); ok {
-			a, err := ar.TableAccess(ctx, t)
+			a, err := ar.TableAccess(ctx, t, o.RoleNames)
 			switch {
 			case errors.Is(err, dbsource.ErrAccessUnsupported):
 			case err != nil && ctx.Err() != nil:

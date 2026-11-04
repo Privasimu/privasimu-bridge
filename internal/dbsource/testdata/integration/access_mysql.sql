@@ -1,4 +1,6 @@
--- Synthetic roles for the access inventory test (MariaDB 10.4+, run as root after mysql.sql).
+-- Synthetic roles for the access inventory test (MariaDB 10.4+, run as root after mysql.sql;
+-- MySQL 8 uses access_mysql8.sql). On MariaDB a role (is_role) can never sign in, and only
+-- roles can be granted, so the locked test accounts below are still counted as readers.
 CREATE ROLE IF NOT EXISTS crm_reader;
 GRANT SELECT ON bridge_it.customers TO crm_reader;
 CREATE USER IF NOT EXISTS 'analyst1'@'%' ACCOUNT LOCK;

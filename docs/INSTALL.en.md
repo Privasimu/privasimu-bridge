@@ -504,13 +504,33 @@ detection:
 ### 7.2 Optional: who can read the tables with personal data
 
 With `access_inventory: true` on a PostgreSQL, MySQL or MariaDB source, the bridge also
-reports, for each table that holds personal data, how many accounts can read it, the names
-of the **group roles** that can (never the names of login accounts, which are often
-people's names), how many administrators read every table, and whether everyone can read
-it (PUBLIC). In mode B this is sent once Privasimu supports it (agent protocol revision 4);
-in mode A it is the extension endpoint `/ext/v1/table-access`, off unless
+reports, for each table that holds personal data, how many accounts can read it, the
+**group roles** that can, how many administrators read every table, and whether everyone
+can read it (PUBLIC). In mode B this is sent once Privasimu supports it (agent protocol
+revision 4); in mode A it is the extension endpoint `/ext/v1/table-access`, off unless
 `server.access_endpoint: true`.
 
+- **Accounts that can sign in are never named**, only counted: their names are often
+  people's names. Only a role that cannot sign in can be a group role: on PostgreSQL a
+  role without `LOGIN` (`rolcanlogin`), on MariaDB a role (`CREATE ROLE`), on MySQL 8 a
+  **locked** account (`CREATE ROLE` makes one). MySQL lets any account be granted to
+  another like a role (`GRANT 'budi'@'%' TO 'intern1'@'%'`); such an account can still sign
+  in, so it is counted, never named.
+- **Role names leave as keyed hashes by default.** A role can still carry a person's name,
+  for example a login turned `NOLOGIN` (PostgreSQL) or locked (MySQL) and granted to a
+  successor when someone leaves. So each role is reported as `r_` and 16 hexadecimal
+  digits, a keyed hash of its name with this install's key (`state/file-id.key`, the one
+  that also names files): the same role keeps its id, and the id cannot be turned back
+  into the name without the key. To find the id of a role on the bridge server:
+  ```sh
+  sudo privasimu-bridge access role-id crm_reader
+  # r_2ee2302d68ba43e7  crm_reader
+  ```
+  To send the role names themselves, choose it explicitly:
+  ```yaml
+  access_inventory:
+    role_names: plain        # hashed (default) | plain
+  ```
 - **PostgreSQL**: no extra right is needed (`pg_roles` and `has_table_privilege` are open
   to every account).
 - **MySQL / MariaDB**: an account sees only its own grants, so the answer is marked
@@ -524,8 +544,10 @@ in mode A it is the extension endpoint `/ext/v1/table-access`, off unless
   GRANT SELECT (Host, User, Select_priv, Super_priv, is_role) ON mysql.user TO 'privasimu_ro'@'<bridge-ip>';
   -- MySQL 8:
   GRANT SELECT ON mysql.role_edges TO 'privasimu_ro'@'<bridge-ip>';
-  GRANT SELECT (Host, User, Select_priv, Super_priv) ON mysql.user TO 'privasimu_ro'@'<bridge-ip>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv, account_locked) ON mysql.user TO 'privasimu_ro'@'<bridge-ip>';
   ```
+  Without `account_locked` the bridge cannot tell a role from an account that signs in:
+  it then names no role and marks the answer incomplete.
 
 ## 8. File shares (mode B and local reports)
 

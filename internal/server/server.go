@@ -62,6 +62,9 @@ type Server struct {
 	trustedProxies []netip.Prefix
 	files          *files.Service
 	entities       detect.EntityCounter
+	// roleNames is what /ext/v1/table-access reports for a group role
+	// (access_inventory.role_names).
+	roleNames dbsource.RoleNaming
 }
 
 // New builds a server from a validated configuration.
@@ -107,6 +110,11 @@ func New(d Deps) (*Server, error) {
 			if s.targetsCA, err = os.ReadFile(cfg.Resolve(cfg.Server.TargetsCAFile)); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if cfg.Server.AccessEndpoint {
+		if s.roleNames, err = dbsource.RoleNamingFor(cfg); err != nil {
+			return nil, err
 		}
 	}
 	return s, nil

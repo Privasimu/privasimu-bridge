@@ -30,8 +30,9 @@ type DB struct {
 	Tables        []Table
 	// Delay is added to every call (to test timeouts).
 	Delay time.Duration
-	// Access answers TableAccess by table name; nil means the engine has no access
-	// inventory (dbsource.ErrAccessUnsupported).
+	// Access answers TableAccess by table name, with the role names as the database has
+	// them (RolesTotal is recounted); nil means the engine has no access inventory
+	// (dbsource.ErrAccessUnsupported).
 	Access map[string]dbsource.Access
 	// Fail makes the given operation ("list", "find", "columns", "sample", "access") fail.
 	Fail map[string]error
@@ -232,8 +233,9 @@ func Int(name string) dbsource.Column {
 	return dbsource.Column{Name: name, DataType: "integer", Nullable: &no}
 }
 
-// TableAccess answers from DB.Access.
-func (c *conn) TableAccess(ctx context.Context, t dbsource.Table) (dbsource.Access, error) {
+// TableAccess answers from DB.Access, whose Roles are the role names as the database has
+// them: they are reported through names like a real engine's.
+func (c *conn) TableAccess(ctx context.Context, t dbsource.Table, names dbsource.RoleNaming) (dbsource.Access, error) {
 	if err := c.wait(ctx); err != nil {
 		return dbsource.Access{}, err
 	}
@@ -243,5 +245,7 @@ func (c *conn) TableAccess(ctx context.Context, t dbsource.Table) (dbsource.Acce
 	if c.db.Access == nil {
 		return dbsource.Access{}, dbsource.ErrAccessUnsupported
 	}
-	return c.db.Access[t.Name], nil
+	a := c.db.Access[t.Name]
+	a.Roles, a.RolesTotal = names.Names(a.Roles)
+	return a, nil
 }

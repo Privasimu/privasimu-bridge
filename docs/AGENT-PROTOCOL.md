@@ -1038,14 +1038,20 @@ Further database engines, additive and negotiated like revision 3; protocol 1,
    in `PUT /sources` and adds to each item of a `tables` part that holds personal data
    (at least one column with `pii` true) the key `access`, after `columns`:
    ```json
-   "access":{"readers":4,"roles":["crm_reader"],"roles_total":1,"admins":1,"public":false,"complete":true}
+   "access":{"readers":4,"roles":["r_2ee2302d68ba43e7"],"roles_total":1,"admins":1,"public":false,"complete":true}
    ```
-   `readers` counts the login accounts that can read the table (directly, through roles,
-   PUBLIC or as administrators); `roles` names the group roles (never login accounts) with
-   read access and at least one member, sorted, at most 20 (*label* characters, 1 to 255
-   bytes), `roles_total` counts them all; `admins` counts the accounts that read every
-   table; `public` is true when every account can read it; `complete` is false when the
-   agent's database account could not see every grant. Integers only, no other key. A
+   `readers` counts the accounts that can sign in and read the table (directly, through
+   roles, PUBLIC or as administrators); `roles` are the group roles (roles that cannot sign
+   in: never an account that can) with read access and at least one member, sorted, at most
+   20 (*label* characters, 1 to 255 bytes), `roles_total` counts them all; `admins` counts
+   the accounts that read every table; `public` is true when every account can read it;
+   `complete` is false when the agent's database account could not see every grant.
+   Integers only, no other key. By default each role is an opaque id, `r_` and 16
+   lower-case hexadecimal digits (a keyed hash of the role name that only the bridge can
+   compute; the same role keeps its id for one agent), because a role can carry a person's
+   name; with the local setting `access_inventory.role_names: plain` it is the role name
+   itself. The platform shows either as it is and must not expect to resolve an id; the
+   client's operator matches it on the bridge server (`privasimu-bridge access role-id`). A
    platform that does not list `table_access` never receives `access`. Engines in the agent
    today: PostgreSQL, MySQL and MariaDB; the platform should show the counts per table and
    may raise a finding for `public` or many readers.

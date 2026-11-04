@@ -35,6 +35,7 @@ var catalog = map[string][2]string{
 	"config.nlp_endpoint":         {"%s must be an http:// or https:// URL of a service on this server or the internal network (a host name, or a loopback or private address), without credentials, query or fragment", "%s harus URL http:// atau https:// layanan di server ini atau jaringan internal (nama host, atau alamat loopback atau privat), tanpa kredensial, query, atau fragmen"},
 	"config.nlp_limits":           {"%s: timeout 1s-60s, min_chars 20-100000, max_bytes 1KiB-1MiB, min_score 0-1 and concurrency 1-16", "%s: timeout 1s-60s, min_chars 20-100000, max_bytes 1KiB-1MiB, min_score 0-1, dan concurrency 1-16"},
 	"config.access_engine":        {"%s is available for PostgreSQL, MySQL and MariaDB sources only", "%s hanya tersedia untuk sumber PostgreSQL, MySQL, dan MariaDB"},
+	"config.role_names":           {"%s must be hashed or plain", "%s harus hashed atau plain"},
 	"config.cloud_tls":            {"%s must be verify-full: a cloud service is always reached over verified TLS", "%s harus verify-full: layanan cloud selalu dijangkau lewat TLS yang diverifikasi"},
 	"config.snowflake_auth":       {"%s needs exactly one of private_key (a key pair) and password (a programmatic access token)", "%s memerlukan tepat satu dari private_key (pasangan kunci) dan password (programmatic access token)"},
 	"config.project":              {"%s must be a Google Cloud project id (6-30 lower-case letters, digits and -)", "%s harus id proyek Google Cloud (6-30 huruf kecil, angka, dan -)"},
@@ -119,6 +120,7 @@ var catalog = map[string][2]string{
 	"cli.cmd.key":         {"create | list | revoke API keys of mode A", "create | list | revoke kunci API mode A"},
 	"cli.cmd.secret":      {"set | list | delete secrets in the encrypted store", "set | list | delete rahasia di penyimpanan terenkripsi"},
 	"cli.cmd.files":       {"list | scan | locate: scan file roots on this server", "list | scan | locate: pindai root berkas di server ini"},
+	"cli.cmd.access":      {"role-id: the ids under which group roles are reported (access_inventory)", "role-id: id yang dipakai untuk melaporkan role grup (access_inventory)"},
 	"cli.cmd.healthcheck": {"exit 0 when the running bridge is healthy (Docker)", "keluar 0 bila bridge yang berjalan sehat (Docker)"},
 	"cli.cmd.version":     {"print the version", "tampilkan versi"},
 	"cli.error":           {"Error:", "Galat:"},
@@ -225,6 +227,9 @@ var catalog = map[string][2]string{
 	"cli.files.skipped":      {"Skipped: %s", "Dilewati: %s"},
 	"cli.files.report":       {"Local report (with paths, stays on this server): %s", "Laporan lokal (dengan path, tetap di server ini): %s"},
 	"cli.files.id_not_found": {"File id %s is not in the latest report of this root.", "Id berkas %s tidak ada di laporan terakhir root ini."},
+
+	"cli.access.usage": {"Usage: privasimu-bridge access role-id ROLE_NAME... (prints the id Privasimu shows for each group role)", "Pemakaian: privasimu-bridge access role-id NAMA_ROLE... (menampilkan id yang ditunjukkan Privasimu untuk setiap role grup)"},
+	"cli.access.plain": {"access_inventory.role_names is plain: Privasimu shows the role names themselves.", "access_inventory.role_names bernilai plain: Privasimu menampilkan nama role itu sendiri."},
 
 	"cli.service.usage": {
 		"Usage: privasimu-bridge service install [--mode serve|agent] [--name NAME] [--account ACCOUNT] [--dry-run] | service uninstall [--name NAME]",

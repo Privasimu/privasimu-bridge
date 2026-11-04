@@ -83,6 +83,9 @@ type Agent struct {
 	features []string
 	// withheld are the sources already reported in the log as not sent to this platform.
 	withheld map[string]bool
+	// roleNames is what the access inventory reports for a group role
+	// (access_inventory.role_names).
+	roleNames dbsource.RoleNaming
 }
 
 // State is what enrollment leaves in the state directory.
@@ -159,6 +162,9 @@ func New(d Deps) (*Agent, error) {
 	token, err := d.Resolver.Resolve(d.Config.Agent.Token)
 	if err != nil {
 		return nil, ErrNotEnrolled
+	}
+	if a.roleNames, err = dbsource.RoleNamingFor(d.Config); err != nil {
+		return nil, err
 	}
 	a.client.SetToken(token.Reveal())
 	return a, nil

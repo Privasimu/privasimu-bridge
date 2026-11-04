@@ -151,3 +151,24 @@ func TestAccessInventoryEngines(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessInventoryRoleNames(t *testing.T) {
+	source := "sources:\n  - {id: x, engine: mysql, host: h, database: d, username: u, password: \"secret:p\", access_inventory: true}\n"
+	for block, want := range map[string]string{"": RoleNamesHashed, "access_inventory: {role_names: hashed}\n": RoleNamesHashed,
+		"access_inventory: {role_names: plain}\n": RoleNamesPlain, "access_inventory: {role_names: names}\n": ""} {
+		c, err := Parse([]byte(block + source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.Validate()
+		if want == "" {
+			if err == nil || !strings.Contains(err.Error(), "access_inventory.role_names") {
+				t.Errorf("%q: %v", block, err)
+			}
+			continue
+		}
+		if err != nil || c.AccessInventory.RoleNames != want || !c.UsesAccessInventory() {
+			t.Errorf("%q: %q %v", block, c.AccessInventory.RoleNames, err)
+		}
+	}
+}

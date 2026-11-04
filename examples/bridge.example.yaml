@@ -9,7 +9,7 @@
 # typos). Relative paths are relative to this file's folder.
 
 language: en                  # en | id: language of CLI output and error messages
-state_dir: state              # reports, agent state, file-id key (needs write access)
+state_dir: state              # reports, agent state, the id key of files and roles (needs write access)
 
 # ---------------------------------------------------------------------------------------
 # Mode A: "privasimu-bridge serve". Privasimu calls this HTTPS server (contract v1).
@@ -119,8 +119,9 @@ sources:
       rows: 100
       min_matches: 3
       ratio: 0.2
-    # Who can read each table with personal data: counts and group role names, never
-    # account names (PostgreSQL, MySQL, MariaDB; see the install guide, section 7.2).
+    # Who can read each table with personal data: counts and group roles (keyed hashes
+    # unless access_inventory.role_names below is plain), never the names of accounts that
+    # can sign in (PostgreSQL, MySQL, MariaDB; see the install guide, section 7.2).
     access_inventory: true
     # Mode A: what is typed in Privasimu for this source. Defaults to host and database
     # above; an alias keeps the real address out of Privasimu.
@@ -221,6 +222,16 @@ sources:
     schemas: [crm]
     username: AKIAEXAMPLEPLACEHOLD  # access key id
     password: "secret:aws_secret"   # secret access key
+
+# How the sources with access_inventory report the group roles that can read a table.
+# Accounts that can sign in are only counted, never named, in either mode.
+access_inventory:
+  # hashed (default): each role as "r_" and 16 hex digits, a keyed hash of its name with
+  #   this install's key (state_dir/file-id.key); the same name keeps its id. Find a role's
+  #   id here with: privasimu-bridge access role-id ROLE_NAME
+  # plain: the role names themselves. A role can carry a person's name (a PostgreSQL login
+  #   turned NOLOGIN, a locked MySQL account granted to a successor), so choose it knowingly.
+  role_names: hashed
 
 # ---------------------------------------------------------------------------------------
 # File shares this bridge may scan. Only these directories are ever read; the platform

@@ -2,11 +2,9 @@ package files
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -156,37 +154,10 @@ func FileID(key []byte, rootID, rel string) string {
 	return "f_" + hex.EncodeToString(m.Sum(nil)[:8])
 }
 
-// LoadOrCreateKey returns the file-id key kept in the state directory, creating it on
-// first use with owner-only permissions.
-func LoadOrCreateKey(stateDir string) ([]byte, error) {
-	p := filepath.Join(stateDir, "file-id.key")
-	data, err := os.ReadFile(p) // #nosec G304 -- inside the configured state directory
-	if err == nil {
-		key, derr := hex.DecodeString(string(trimNL(data)))
-		if derr == nil && len(key) == 32 {
-			return key, nil
-		}
-		return nil, errors.New("file-id.key is damaged; delete it to create a new one (file ids will change)")
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	if err := secrets.WriteFileAtomic(p, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
-func trimNL(b []byte) []byte {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
-}
+// LoadOrCreateKey returns the install's id key kept in the state directory, creating it on
+// first use with owner-only permissions (secrets.LoadOrCreateIDKey; the access inventory
+// derives its role-name key from it too).
+func LoadOrCreateKey(stateDir string) ([]byte, error) { return secrets.LoadOrCreateIDKey(stateDir) }
 
 // store keeps the latest local report of each root in the state directory.
 type store struct{ dir string }

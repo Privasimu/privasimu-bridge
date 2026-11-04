@@ -9,7 +9,8 @@ import (
 )
 
 // PathTableAccess answers who can read a table (a proposal like the file endpoints, off
-// unless server.access_endpoint): counts and group role names, never account names. The
+// unless server.access_endpoint): counts and group roles (keyed hashes unless
+// access_inventory.role_names is plain), never the names of accounts that can sign in. The
 // body is the one of PathTableColumns; only a configured source with access_inventory is
 // answered, never request credentials.
 const PathTableAccess = "/ext/v1/table-access"
@@ -45,7 +46,7 @@ func (s *Server) tableAccess(ctx context.Context, req *v1Request, ev *audit.Even
 	if !ok {
 		return nil, fail(CodeUnsupportedDBType)
 	}
-	a, err := ar.TableAccess(ctx, table)
+	a, err := ar.TableAccess(ctx, table, s.roleNames)
 	if errors.Is(err, dbsource.ErrAccessUnsupported) {
 		return nil, fail(CodeUnsupportedDBType)
 	}

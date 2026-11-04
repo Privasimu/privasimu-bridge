@@ -531,7 +531,7 @@ func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceCon
 		MaxColumns: lower(defaultMaxColumns, o.MaxColumns),
 	}
 	if src.AccessInventory && a.platformHas(FeatureTableAccess) {
-		opts.Access = true
+		opts.Access, opts.RoleNames = true, a.roleNames
 	}
 	if a.entities != nil {
 		opts.Entities, opts.EntityMinChars, opts.EntityMaxBytes = a.entities, a.cfg.Detection.NLP.MinChars, int(a.cfg.Detection.NLP.MaxBytes)

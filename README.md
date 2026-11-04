@@ -24,7 +24,8 @@ vulnerability ids leave. Indonesian identifiers are validated locally (NIK, KK, 
 your own language-model service on the bridge server or your network (names, addresses,
 health and the like in free text); only its counts are used. Optionally, the bridge also
 reports who can read each table with personal data (PostgreSQL, MySQL, MariaDB): counts and
-group role names, never account names.
+group roles, never the names of accounts that can sign in; role names leave as keyed hashes
+unless you set `access_inventory.role_names: plain`.
 
 ## Works with both Privasimu Nexus lines (Laravel and Go)
 

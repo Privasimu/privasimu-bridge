@@ -9,6 +9,7 @@ import (
 
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
+	"github.com/privasimu/bridge/internal/secrets"
 )
 
 // The engines beyond the platform's registry (Redshift, ClickHouse) are served from a
@@ -65,15 +66,31 @@ func TestSnowflakeFromAConfiguredSource(t *testing.T) {
 }
 
 func TestTableAccessEndpoint(t *testing.T) {
+	// Role names leave as keyed hashes by default, as they are only with role_names: plain.
+	for _, roleNames := range []string{config.RoleNamesHashed, config.RoleNamesPlain} {
+		h := newHarness(t, func(c *config.Config) {
+			c.Server.AccessEndpoint = true
+			c.Sources[0].AccessInventory = true
+			c.AccessInventory.RoleNames = roleNames
+		})
+		h.db.Access = map[string]dbsource.Access{"users": {Readers: 4, Roles: []string{"crm_reader"}, RolesTotal: 1, Admins: 1, Complete: true}}
+		role := "crm_reader"
+		if roleNames == config.RoleNamesHashed {
+			key, err := secrets.LoadOrCreateIDKey(h.cfg.Resolve(h.cfg.StateDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			role = dbsource.HashedRoleNames(key).Name("crm_reader")
+		}
+		resp, body := h.post(PathTableAccess, h.body(map[string]any{"table_name": "users"}), nil)
+		if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"access":{"readers":4,"roles":["`+role+`"],"roles_total":1,"admins":1,"public":false,"complete":true}`)) {
+			t.Fatalf("%s: %d %s", roleNames, resp.StatusCode, body)
+		}
+	}
 	h := newHarness(t, func(c *config.Config) {
 		c.Server.AccessEndpoint = true
 		c.Sources[0].AccessInventory = true
 	})
-	h.db.Access = map[string]dbsource.Access{"users": {Readers: 4, Roles: []string{"crm_reader"}, RolesTotal: 1, Admins: 1, Complete: true}}
-	resp, body := h.post(PathTableAccess, h.body(map[string]any{"table_name": "users"}), nil)
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"access":{"readers":4,"roles":["crm_reader"],"roles_total":1,"admins":1,"public":false,"complete":true}`)) {
-		t.Fatalf("%d %s", resp.StatusCode, body)
-	}
 	if resp, _ := h.post(PathTableAccess, h.body(map[string]any{"table_name": "nope"}), nil); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown table: %d", resp.StatusCode)
 	}

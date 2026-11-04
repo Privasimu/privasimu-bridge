@@ -109,9 +109,12 @@ func TestJobsAgainstRealDatabases(t *testing.T) {
 				t.Fatalf("the access inventory of customers: %+v", customers.Access)
 			}
 			body := e.fp.allBodies()
-			for _, v := range append(itenv.FixtureValues, s.Password, "analyst1", "app_user") {
+			// Accounts that can sign in never leave; role names do not either with the default
+			// access_inventory.role_names: hashed.
+			for _, v := range append(itenv.FixtureValues, s.Password, "analyst1", "app_user", "successor1", "budi.santoso", "intern1",
+				"crm_reader", "budi_santoso") {
 				if v != "" && bytes.Contains(body, []byte(v)) {
-					t.Fatal("a value or the password reached the platform")
+					t.Fatalf("a value, a password, an account or a role name reached the platform (%d bytes)", len(v))
 				}
 			}
 		})

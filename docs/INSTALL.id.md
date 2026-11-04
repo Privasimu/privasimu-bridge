@@ -514,12 +514,33 @@ detection:
 
 Dengan `access_inventory: true` pada sumber PostgreSQL, MySQL, atau MariaDB, bridge juga
 melaporkan, untuk setiap tabel yang berisi data pribadi, berapa akun yang dapat membacanya,
-nama **peran grup** (role) yang dapat membacanya (tidak pernah nama akun login, yang sering
-berupa nama orang), berapa administrator yang dapat membaca semua tabel, dan apakah semua
-akun dapat membacanya (PUBLIC). Di mode B data ini dikirim setelah Privasimu mendukungnya
-(protokol agen revisi 4); di mode A tersedia di endpoint tambahan `/ext/v1/table-access`,
-yang mati kecuali `server.access_endpoint: true`.
+**peran grup** (role) yang dapat membacanya, berapa administrator yang dapat membaca semua
+tabel, dan apakah semua akun dapat membacanya (PUBLIC). Di mode B data ini dikirim setelah
+Privasimu mendukungnya (protokol agen revisi 4); di mode A tersedia di endpoint tambahan
+`/ext/v1/table-access`, yang mati kecuali `server.access_endpoint: true`.
 
+- **Akun yang dapat login tidak pernah disebut namanya**, hanya dihitung: namanya sering
+  berupa nama orang. Hanya role yang tidak dapat login yang bisa menjadi peran grup: di
+  PostgreSQL role tanpa `LOGIN` (`rolcanlogin`), di MariaDB sebuah role (`CREATE ROLE`), di
+  MySQL 8 akun yang **terkunci** (`CREATE ROLE` membuat akun seperti itu). MySQL membolehkan
+  akun apa pun diberikan ke akun lain layaknya role (`GRANT 'budi'@'%' TO 'intern1'@'%'`);
+  akun seperti itu tetap dapat login, jadi hanya dihitung, tidak pernah disebut namanya.
+- **Nama role dikirim sebagai hash berkunci secara bawaan.** Sebuah role tetap bisa memakai
+  nama orang, misalnya akun login yang diubah menjadi `NOLOGIN` (PostgreSQL) atau dikunci
+  (MySQL) lalu diberikan ke penggantinya saat seseorang keluar. Karena itu setiap role
+  dilaporkan sebagai `r_` dan 16 digit heksadesimal, hash berkunci dari namanya dengan kunci
+  instalasi ini (`state/file-id.key`, kunci yang juga menamai berkas): role yang sama tetap
+  memakai id yang sama, dan id tidak dapat dikembalikan menjadi nama tanpa kunci itu. Untuk
+  mencari id sebuah role di server bridge:
+  ```sh
+  sudo privasimu-bridge access role-id crm_reader
+  # r_2ee2302d68ba43e7  crm_reader
+  ```
+  Untuk mengirim nama role apa adanya, pilih secara eksplisit:
+  ```yaml
+  access_inventory:
+    role_names: plain        # hashed (bawaan) | plain
+  ```
 - **PostgreSQL**: tidak perlu hak tambahan (`pg_roles` dan `has_table_privilege` terbuka
   bagi setiap akun).
 - **MySQL / MariaDB**: sebuah akun hanya melihat hak aksesnya sendiri, sehingga jawabannya
@@ -533,8 +554,10 @@ yang mati kecuali `server.access_endpoint: true`.
   GRANT SELECT (Host, User, Select_priv, Super_priv, is_role) ON mysql.user TO 'privasimu_ro'@'<ip-bridge>';
   -- MySQL 8:
   GRANT SELECT ON mysql.role_edges TO 'privasimu_ro'@'<ip-bridge>';
-  GRANT SELECT (Host, User, Select_priv, Super_priv) ON mysql.user TO 'privasimu_ro'@'<ip-bridge>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv, account_locked) ON mysql.user TO 'privasimu_ro'@'<ip-bridge>';
   ```
+  Tanpa `account_locked` bridge tidak dapat membedakan role dari akun yang dapat login:
+  bridge lalu tidak menyebut nama role apa pun dan menandai jawabannya tidak lengkap.
 
 ## 8. Berbagi berkas (mode B dan laporan lokal)
 
