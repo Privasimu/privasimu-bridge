@@ -157,6 +157,7 @@ bridge ↔ file shares; bridge ↔ local operator.
 | A hostile database server | MySQL `LOAD DATA LOCAL INFILE` refused, no clear-text passwords, response sizes bounded by the drivers | Driver bugs |
 | Malicious files on a share (links out of the root, junctions, zip bombs, hostile PDFs, FIFOs) | Roots from local configuration only; `os.Root`; links, junctions and special files skipped; non-blocking open and a regular-file re-check; zip sizes checked unsigned and bounded; PDF parsed in a child process with an empty environment and a hard timeout | A parser bug inside the child |
 | Secrets on the bridge host | No secret in `bridge.yaml` (literal passwords are a configuration error); encrypted store (AES-256-GCM), key file 0600 or DPAPI machine scope on Windows; secrets printed as `[redacted]` | An administrator or root on the host can read secrets: the store protects copies and backups, not a compromised host |
+| Text sent to the optional language model (`detection.nlp`) | Off by default; only to an endpoint the operator configures, whose every address must be loopback or private (checked and pinned at each connection, no proxy, no redirect); bounded text per request, timeouts, bounded concurrency; only counts kept | The model service sees the text it examines: it must be the client's own, on the bridge server or its internal network |
 | Data in logs | The audit log has typed fields only; resolved secrets redact themselves; sampling errors never show driver messages (they can quote values) | Local operational logs can name hosts and databases (for troubleshooting, on the server) |
 | Supply chain | Few dependencies with versions pinned in go.sum, `govulncheck` clean, `gosec` clean, base images pinned by digest, no cgo | — |
 
@@ -332,7 +333,9 @@ and scans nothing for it. An Athena source never announces `sampling` (catalog o
 Local sampling is off by default. When on, it reads up to `rows` values per column inside
 a read-only transaction on the bridge; each value is examined in memory and dropped. The
 tests check that sampled values, file content, paths, hosts and passwords never appear in
-any response (mode A) or request (mode B).
+any response (mode A) or request (mode B). With the optional language model
+(`detection.nlp`, section 10), long text also goes to the client's own model service on the
+bridge server or its internal network; only its counts are kept.
 
 ## 8. Local credentials
 
@@ -388,6 +391,23 @@ A literal password in the file is a validation error that never echoes the value
   are personal data but whose name is not is marked `shadow`.
 - **Protection state** from samples: plaintext, masked, encrypted (Laravel Crypt
   payloads, long hex, high-entropy base64), mixed.
+- **Language model for long text (optional, `detection.nlp`, off by default).** Patterns
+  cannot recognise a name, an address or a diagnosis in free text. The bridge can send long
+  text to a model service the client runs on the bridge server or its internal network
+  (the client's own `nlp-data-discovery`, the service api-data-discovery calls, or any
+  service answering `{"entities": [{"entity_group", "score", "start", ...}]}`): the sampled
+  values of a column that reach `min_chars` (200) characters, at most `max_bytes` (32 KiB)
+  per column in one request, and the first `max_bytes` of a file's text. Only the counts per
+  category are kept (the entity texts are not even decoded) and merged as content findings:
+  for a column, once per value and category like the patterns; for a file, the larger of
+  the two counts. The model adds only categories without a validator (names, addresses,
+  dates and places of birth, gender, religion, marital status, nationality, health,
+  biometrics, genetics, criminal records, financial data, driving licences, employee ids,
+  user names, IP addresses, vehicle plates, mothers' maiden names), so a validated
+  identifier is never counted twice. Every connection is checked against loopback and
+  private ranges and pinned to the checked address, without proxy or redirect; requests
+  have a timeout and bounded concurrency; after a failure the service is left alone for a
+  minute and the bridge uses its patterns and validators only. `check` tests the service.
 
 ## 11. Operations
 
@@ -484,14 +504,14 @@ code does, not what a deployment may add around it (a reverse proxy, a firewall)
 | 12 | Can the platform make it connect anywhere? | no: local sources, or `allowed_targets` with pinned resolution and metadata blocked | yes: it connects to any host the request names (README "Authentication", `app/core/security.py` docstring); no target allow-list and no private or metadata address check; with `db_type: sqlite` the request's `database` is opened as a file path on the service host (`app/core/database.py` `_build_db_url`); `/v1/scan-remote-document` downloads any URL with aiohttp (redirects followed by default) and, when the direct download is refused, retries with boto3 ambient credentials, `DefaultAzureCredential` or `DROPBOX_ACCESS_TOKEN` (`document_scanner.py` `_download_from_s3`, `_download_from_azure_blob`, `_download_from_dropbox`) |
 | 13 | Read-only sessions and timeouts on the databases | yes, per engine | no read-only session, no statement or lock timeout; `pool_timeout=30`, and `connect_timeout=10` in `access_scanner.py` only |
 | 14 | Indonesian identifier validators (NIK structure, NPWP, KK, BPJS, Luhn) | yes | regular expressions only: a NIK is any 16 digits, an NPWP the printed format or 9 to 15 digits (`app/core/patterns.py` 30, 49); no province, date or checksum check; `python-stdnum`, `schwifty` and `phonenumbers` are dependencies but unused in `app/`; only the SIM shape is checked (`validate_indonesian_drivers_license`) |
-| 15 | Content sampling, and where values go | optional, local only, counts out | whole tables are read in the service and rows and values go back to the caller (row 1); texts longer than 200 characters go to the separate NLP service `nlp-data-discovery` (`NLP_API_ENDPOINT`, default `http://localhost:8333/`, `nlp_service.py`) |
+| 15 | Content sampling, and where values go | optional, local only, counts out; optionally long text to the client's own language-model service on the bridge server or its internal network (counts kept) | whole tables are read in the service and rows and values go back to the caller (row 1); texts longer than 200 characters go to the separate NLP service `nlp-data-discovery` (`NLP_API_ENDPOINT`, default `http://localhost:8333/`, `nlp_service.py`) |
 | 16 | Engines | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Amazon Redshift, ClickHouse, Snowflake, Google BigQuery, Databricks SQL, Amazon Athena (catalog only); the engines after MongoDB in mode B from revision 4 of the agent protocol, Snowflake also in mode A; every engine read-only (session settings, a read-only token scope, GET-only requests, or least-privilege roles where the service has no such setting) with server-side timeouts where the engine has them | drivers in `pyproject.toml`: SQLite, MySQL/MariaDB/TiDB, the PostgreSQL family (also YugabyteDB, Greenplum, openGauss), SQL Server (ODBC), Oracle, Db2 (`ibm-db-sa`), Snowflake, Redshift, BigQuery, Athena, Databricks, ClickHouse; 17 more `db_type`s (CockroachDB, Trino, Hive, Teradata, SAP HANA, …) build a URL without an installed driver and answer 500, 11 are refused by name with 400 (`app/core/database.py`); grants and access: `/v1/scan-access` (MySQL accounts and `SHOW GRANTS`), `/v1/scan-access-s3`, `/v1/scan-access-application` |
 | 17 | File-share scanning: who chooses the path? | local allow-list only; `os.Root`; links and junctions skipped | no share scanning: `/v1/scan-file` takes an uploaded file (multipart `UploadFile`), `/v1/scan-remote-document` a URL or blob URL the caller supplies |
 | 18 | Parser isolation for complex formats | PDF in a child process with a timeout | none: PDF (PyPDF2), DOCX (python-docx) and XLSX (openpyxl) are parsed inside the service process (`file_scanner.py` 46, 418, 423, 439) |
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | no value is logged on purpose, but driver error texts, which can quote values, are logged and returned (row 4); a `setup_logging()` that would log SQLAlchemy statements and rows at DEBUG to `debug.log` exists but is never called (`app/logging_config.py`) |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | Docker only; the image has no `USER` line, so the service runs as root; no Windows service or systemd unit |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | `uv.lock` pins versions and the image installs with `uv sync --frozen`; `requirements.txt` leaves most packages unpinned; base image pinned by tag, `ghcr.io/astral-sh/uv:latest` unpinned; the obsolete `logging` 0.4.9.6 (2013) is a declared dependency; no vulnerability scan, SBOM or licence notice configured |
-| 22 | Tests (contract, security, minimisation) | 189 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
+| 22 | Tests (contract, security, minimisation) | 200 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | none |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | `GET /health` (status, time, version); `/docs` off unless `DOCS_ENABLED`; no configuration check or command line; English messages only |
 
@@ -505,7 +525,7 @@ the bridge can take it over:
   pure-Go driver.
 - **NLP for long text** (`nlp-data-discovery`): only as an optional endpoint inside the
   client's network that the operator configures; text stays on that network and only
-  counts leave.
+  counts leave. Added as `detection.nlp` (section 10).
 - **Grants and access** (`scan-access`): only as counts and role names for the tables that
   hold personal data, never account names or rows of application user tables.
 
@@ -548,6 +568,10 @@ caller names, credentials in every request) is what the bridge leaves out by des
   it has one (BigQuery's read-only token scope) and the least-privilege role otherwise;
   Snowflake lists at most 10 000 tables per database (a limit of SHOW); BigQuery fields
   inside records are classified by name only; Athena is never sampled.
+- The language-model client was tested against a fake service with the interface
+  api-data-discovery uses (`{"text"}` in, `entities` with `entity_group`, `score` and
+  character `start` out), not against nlp-data-discovery itself; its labels are mapped as
+  in api-data-discovery (`app/services/nlp_service.py`), unknown labels are ignored.
 - Scanned PDFs and images (OCR), legacy Office formats, encrypted documents and archives
   inside shares are counted, not read.
 - Name heuristics and the NPWP check digit (DJP does not publish the algorithm; Luhn is

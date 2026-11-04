@@ -20,7 +20,9 @@ XLSX, PDF text. Software (mode B, opt-in): installed packages of a host, a direc
 local container image archive, with Syft, matched against vulnerability data with Grype or
 Trivy, for the security posture per RoPA; only package names, versions, licences and
 vulnerability ids leave. Indonesian identifiers are validated locally (NIK, KK, NPWP, BPJS,
-+62/08 phone numbers, payment cards with Luhn, and more).
++62/08 phone numbers, payment cards with Luhn, and more). Optionally, long text also goes to
+your own language-model service on the bridge server or your network (names, addresses,
+health and the like in free text); only its counts are used.
 
 ## Works with both Privasimu Nexus lines (Laravel and Go)
 
