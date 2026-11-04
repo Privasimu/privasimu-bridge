@@ -510,6 +510,32 @@ detection:
   validatornya saja selama satu menit dan mencatatnya sekali di log. `check` mengirim teks
   sintetis pendek: `[OK]   layanan NLP http://127.0.0.1:8333/: menjawab dalam 85 ms`.
 
+### 7.2 Opsional: siapa yang dapat membaca tabel berisi data pribadi
+
+Dengan `access_inventory: true` pada sumber PostgreSQL, MySQL, atau MariaDB, bridge juga
+melaporkan, untuk setiap tabel yang berisi data pribadi, berapa akun yang dapat membacanya,
+nama **peran grup** (role) yang dapat membacanya (tidak pernah nama akun login, yang sering
+berupa nama orang), berapa administrator yang dapat membaca semua tabel, dan apakah semua
+akun dapat membacanya (PUBLIC). Di mode B data ini dikirim setelah Privasimu mendukungnya
+(protokol agen revisi 4); di mode A tersedia di endpoint tambahan `/ext/v1/table-access`,
+yang mati kecuali `server.access_endpoint: true`.
+
+- **PostgreSQL**: tidak perlu hak tambahan (`pg_roles` dan `has_table_privilege` terbuka
+  bagi setiap akun).
+- **MySQL / MariaDB**: sebuah akun hanya melihat hak aksesnya sendiri, sehingga jawabannya
+  ditandai tidak lengkap kecuali akun itu boleh membaca tabel hak akses. Berikan akses baca
+  ke tabel-tabel itu, tanpa kolom hash password:
+  ```sql
+  GRANT SELECT ON mysql.db TO 'privasimu_ro'@'<ip-bridge>';
+  GRANT SELECT ON mysql.tables_priv TO 'privasimu_ro'@'<ip-bridge>';
+  -- MariaDB:
+  GRANT SELECT ON mysql.roles_mapping TO 'privasimu_ro'@'<ip-bridge>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv, is_role) ON mysql.user TO 'privasimu_ro'@'<ip-bridge>';
+  -- MySQL 8:
+  GRANT SELECT ON mysql.role_edges TO 'privasimu_ro'@'<ip-bridge>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv) ON mysql.user TO 'privasimu_ro'@'<ip-bridge>';
+  ```
+
 ## 8. Berbagi berkas (mode B dan laporan lokal)
 
 Root berkas dipindai lewat mode B atau secara lokal lewat baris perintah. Hanya folder

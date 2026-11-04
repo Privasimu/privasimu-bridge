@@ -501,6 +501,32 @@ detection:
   validators alone for a minute and logs it once. `check` sends a short synthetic text:
   `[OK]   NLP service http://127.0.0.1:8333/: answered in 85 ms`.
 
+### 7.2 Optional: who can read the tables with personal data
+
+With `access_inventory: true` on a PostgreSQL, MySQL or MariaDB source, the bridge also
+reports, for each table that holds personal data, how many accounts can read it, the names
+of the **group roles** that can (never the names of login accounts, which are often
+people's names), how many administrators read every table, and whether everyone can read
+it (PUBLIC). In mode B this is sent once Privasimu supports it (agent protocol revision 4);
+in mode A it is the extension endpoint `/ext/v1/table-access`, off unless
+`server.access_endpoint: true`.
+
+- **PostgreSQL**: no extra right is needed (`pg_roles` and `has_table_privilege` are open
+  to every account).
+- **MySQL / MariaDB**: an account sees only its own grants, so the answer is marked
+  incomplete unless it may read the grant tables. Give it read access to them, leaving out
+  the password hash column:
+  ```sql
+  GRANT SELECT ON mysql.db TO 'privasimu_ro'@'<bridge-ip>';
+  GRANT SELECT ON mysql.tables_priv TO 'privasimu_ro'@'<bridge-ip>';
+  -- MariaDB:
+  GRANT SELECT ON mysql.roles_mapping TO 'privasimu_ro'@'<bridge-ip>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv, is_role) ON mysql.user TO 'privasimu_ro'@'<bridge-ip>';
+  -- MySQL 8:
+  GRANT SELECT ON mysql.role_edges TO 'privasimu_ro'@'<bridge-ip>';
+  GRANT SELECT (Host, User, Select_priv, Super_priv) ON mysql.user TO 'privasimu_ro'@'<bridge-ip>';
+  ```
+
 ## 8. File shares (mode B and local reports)
 
 File roots are scanned with mode B or locally with the command line. Only the folders
