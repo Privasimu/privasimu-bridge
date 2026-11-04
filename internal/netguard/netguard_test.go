@@ -57,6 +57,15 @@ func TestGuardResolve(t *testing.T) {
 	if _, err := g3.Resolve(context.Background(), "169.254.169.254"); !errors.Is(err, ErrBlocked) {
 		t.Fatalf("link-local is never allowed: %v", err)
 	}
+	// Nor Alibaba Cloud's metadata address in the shared address space, while the rest of
+	// that range can be allowed.
+	g4, _ := New([]string{"100.64.0.0/10"})
+	if _, err := g4.Resolve(context.Background(), "100.100.100.200"); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("the metadata address is never allowed: %v", err)
+	}
+	if _, err := g4.Resolve(context.Background(), "100.100.100.201"); err != nil {
+		t.Fatalf("the rest of an allowed range: %v", err)
+	}
 }
 
 func TestGuardDialsOnlyTheCheckedAddress(t *testing.T) {

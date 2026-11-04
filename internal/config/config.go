@@ -250,10 +250,15 @@ type DetectionConfig struct {
 // sent to it only, and only the counts it returns are used. Off by default.
 type NLPConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// Endpoint is the URL the text is posted to; its host must be loopback or a private
-	// address (checked at every connection).
+	// Endpoint is the URL the text is posted to: https:// to a host whose every address is
+	// loopback or private, or http:// to this server only (localhost or a loopback address);
+	// checked at every connection (Ranges).
 	Endpoint string `yaml:"endpoint"`
 	CAFile   string `yaml:"ca_file"`
+	// AllowCGNAT also lets an https endpoint be in 100.64.0.0/10 (shared address space,
+	// RFC 6598), which some networks use internally. Off by default: clouds keep their own
+	// services there.
+	AllowCGNAT bool `yaml:"allow_cgnat"`
 	// Timeout of one request; MinChars the shortest text sent; MaxBytes the most text of one
 	// file or one column sent in one request; MinScore the least confidence of an entity.
 	Timeout     Duration `yaml:"timeout"`

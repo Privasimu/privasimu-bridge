@@ -20,7 +20,10 @@ var ErrBlocked = errors.New("the database address is not allowed")
 // ErrUnresolved means the host name does not resolve.
 var ErrUnresolved = errors.New("the database host does not resolve")
 
-// neverAllowed cannot be opened by any allow-list entry.
+// neverAllowed cannot be opened by any allow-list entry: unspecified, link-local
+// (169.254.169.254 is the metadata service of most clouds), multicast and broadcast
+// addresses, AWS's IPv6 metadata address, and Alibaba Cloud's metadata address, which lies
+// in the shared address space 100.64.0.0/10 rather than in link-local.
 var neverAllowed = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
@@ -30,6 +33,7 @@ var neverAllowed = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("ff00::/8"),
 	netip.MustParsePrefix("fd00:ec2::254/128"),
+	netip.MustParsePrefix("100.100.100.200/32"),
 }
 
 // LookupFunc resolves a host name.
