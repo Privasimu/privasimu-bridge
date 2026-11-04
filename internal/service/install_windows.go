@@ -61,7 +61,7 @@ func Install(s Spec, out io.Writer, dryRun bool) error {
 	}
 	defer m.Disconnect()
 	if existing, err := m.OpenService(s.Name); err == nil {
-		existing.Close()
+		_ = existing.Close()
 		return fmt.Errorf("service %s already exists; uninstall it first", s.Name)
 	}
 	cfg := mgr.Config{

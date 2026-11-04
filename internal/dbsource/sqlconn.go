@@ -50,12 +50,12 @@ func newSQLConn(ctx context.Context, db *sql.DB, d dialect, t Target, tlsOn *boo
 	pctx, cancel := context.WithTimeout(ctx, t.Timeout)
 	defer cancel()
 	if err := db.PingContext(pctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, wrap("connect", err, true)
 	}
 	schema, err := d.defaultSchema(pctx, db, t)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, wrap("default schema", err, true)
 	}
 	c := &sqlConn{db: db, d: d, t: t, schema: schema, tls: tlsOn}

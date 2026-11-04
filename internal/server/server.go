@@ -370,7 +370,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.cfg.Server.TLS.Mode == config.TLSModeFile {
 		tlsCfg, err := s.TLSConfig()
 		if err != nil {
-			raw.Close()
+			_ = raw.Close()
 			return err
 		}
 		// Refused connections are closed before the TLS handshake. The platform then reports a

@@ -282,6 +282,6 @@ func (c *checker) checkAgent(ctx context.Context, cfg *config.Config) {
 		c.fail("cli.check.platform_failed", host, err.Error())
 		return
 	}
-	conn.Close()
+	_ = conn.Close()
 	c.ok("cli.check.platform_ok", host)
 }

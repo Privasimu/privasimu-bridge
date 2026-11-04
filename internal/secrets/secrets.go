@@ -100,7 +100,7 @@ func CreateKeyFile(path string) error {
 		return err
 	}
 	if _, err := f.WriteString(content); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()
@@ -324,17 +324,17 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	name := tmp.Name()
 	cleanup := func() { _ = os.Remove(name) }
 	if err := tmp.Chmod(perm); err != nil && !isWindows {
-		tmp.Close()
+		_ = tmp.Close()
 		cleanup()
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		cleanup()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		cleanup()
 		return err
 	}

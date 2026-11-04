@@ -84,7 +84,9 @@ func Install(s Spec, out io.Writer, dryRun bool) error {
 	if err := run(ctx, out, "chmod", "-R", "u+rwX,g+rX,g-w,o-rwx", confDir); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
+	// A unit file in /etc/systemd/system is world-readable by convention; it holds paths and
+	// sandbox settings, never a secret.
+	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil { // #nosec G306 -- see above
 		return err
 	}
 	fmt.Fprintf(out, "  wrote %s\n", path)
