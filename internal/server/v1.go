@@ -54,15 +54,28 @@ var (
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9_.$@\-]{1,128}$`)
 )
 
-// engineOf maps a platform db_type to a bridge engine.
+// engineOf maps a platform db_type to a bridge engine. The platform's registry sends
+// postgresql, mysql, mssql and oracle today; the other engines are accepted for a future
+// registry entry and served from configured sources only (requestEngine).
 func engineOf(dbType string) (string, bool) {
 	switch dbType {
-	case "postgresql", "mysql", "mssql", "oracle", "mongodb":
+	case "postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse":
 		return dbType, true
 	case "mariadb":
 		return "mysql", true
 	}
 	return "", false
+}
+
+// requestEngine reports whether an engine can be reached with the connection settings a
+// request carries (credentials: request). The others need a configured source, so their
+// credentials stay on the bridge.
+func requestEngine(engine string) bool {
+	switch engine {
+	case "postgresql", "mysql", "mssql", "oracle", "mongodb":
+		return true
+	}
+	return false
 }
 
 func noControl(s string) bool {
@@ -152,6 +165,10 @@ func (s *Server) resolve(req *v1Request, ev *audit.Event) (*resolved, *apiError)
 		}
 		t.MaxOpen = s.cfg.Server.Limits.PerSourceConcurrency
 		return &resolved{target: t, source: src, sampling: s.cfg.SamplingFor(src)}, nil
+	}
+	if !requestEngine(engine) {
+		s.log.Warn("this engine is only scanned from a source in bridge.yaml (credentials: local)", "engine", engine)
+		return nil, fail(CodeUnsupportedDBType)
 	}
 	port := config.DefaultPort(engine)
 	if req.Port != nil {

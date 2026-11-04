@@ -43,6 +43,10 @@ const (
 	FeatureSourceKindPackages = "source_kind:packages"
 	// FeatureJobScanPackages: the platform can queue scan_packages jobs.
 	FeatureJobScanPackages = "job:scan_packages"
+	// FeatureSourceEnginePrefix + engine (revision 4, proposal): the platform accepts
+	// database inventory entries of that engine beyond the five of revision 2
+	// ("source_engine:redshift", "source_engine:clickhouse", ...).
+	FeatureSourceEnginePrefix = "source_engine:"
 )
 
 // Error codes the platform returns in {"error": {"code": ...}}. The status and the exact

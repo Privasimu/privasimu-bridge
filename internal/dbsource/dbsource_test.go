@@ -72,7 +72,7 @@ func TestSampleableTypes(t *testing.T) {
 }
 
 func TestSampleQueriesBindTheRowLimit(t *testing.T) {
-	for _, d := range []dialect{pgDialect{}, myDialect{}, msDialect{}, oraDialect{}} {
+	for _, d := range []dialect{pgDialect{}, myDialect{}, msDialect{}, oraDialect{}, rsDialect{}} {
 		q, args := d.sampleQuery(`T`, []string{"A"}, 50)
 		if len(args) != 1 || args[0] != 50 || strings.Contains(q, "50") {
 			t.Errorf("%s: the row limit must be a bind parameter: %q %v", d.engine(), q, args)
@@ -178,7 +178,7 @@ func TestOpenThroughTheGuardNeverDials(t *testing.T) {
 		dialed.Add(1)
 		return g.Dial(ctx, network, addr)
 	}
-	for _, engine := range []string{"postgresql", "mysql", "mssql", "oracle"} {
+	for _, engine := range []string{"postgresql", "mysql", "mssql", "oracle", "redshift", "clickhouse"} {
 		t.Run(engine, func(t *testing.T) {
 			_, err := Open(context.Background(), Target{Engine: engine, Host: "169.254.169.254", Port: 1234, Database: "d",
 				Username: "u", Password: secrets.Value("p"), Timeout: 2 * time.Second, Dial: dial})

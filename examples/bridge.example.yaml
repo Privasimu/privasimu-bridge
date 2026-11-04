@@ -96,7 +96,7 @@ sources:
   - id: core-banking                # lower case, digits, - _ . (used in mode B and logs)
     label: "Core banking (DC Jakarta)"  # shown in Privasimu, 1-128 characters; default: the id
     description: ""                 # optional, at most 512 characters
-    engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb
+    engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
     host: 10.10.1.20
     port: 5432                      # default per engine
     database: corebank
@@ -155,6 +155,27 @@ sources:
     engine: mongodb
     uri: "secret:app_mongo_uri"     # mongodb://user:pass@host:27017/?authSource=admin
     database: app
+
+  # Redshift and ClickHouse are offered in mode B once Privasimu lists them (agent protocol
+  # revision 4); until then the agent withholds them and says so in its log.
+  - id: dwh-redshift
+    label: "Data warehouse (Redshift)"
+    engine: redshift                # PostgreSQL protocol; port 5439
+    host: dwh.abc123.ap-southeast-3.redshift.amazonaws.com
+    database: dev
+    username: privasimu_ro
+    password: "secret:dwh_redshift"
+    schemas: [public, marts]
+    tls: {mode: verify-full}
+
+  - id: events-clickhouse
+    label: "Events (ClickHouse)"
+    engine: clickhouse              # HTTP interface: 8123, or 8443 with TLS
+    host: ch01.internal.example.co.id
+    database: events                # a ClickHouse database is a schema
+    username: privasimu_ro
+    password: "secret:events_clickhouse"
+    tls: {mode: verify-full, ca_file: tls/db-ca.pem}
 
 # ---------------------------------------------------------------------------------------
 # File shares this bridge may scan. Only these directories are ever read; the platform

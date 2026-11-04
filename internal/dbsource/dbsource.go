@@ -291,6 +291,10 @@ func Open(ctx context.Context, t Target) (Conn, error) {
 		return openOracle(ctx, t)
 	case "mongodb":
 		return openMongo(ctx, t)
+	case "redshift":
+		return openRedshift(ctx, t)
+	case "clickhouse":
+		return openClickHouse(ctx, t)
 	}
 	return nil, &Error{Kind: KindUnsupported, Op: "open", Cause: fmt.Errorf("engine %q is not supported", t.Engine), Safe: true}
 }

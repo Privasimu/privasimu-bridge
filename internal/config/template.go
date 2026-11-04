@@ -119,7 +119,7 @@ agent:
 sources: []
 #  - id: core-banking
 #    label: "Core banking"
-#    engine: postgresql        # postgresql | mysql | mariadb | mssql | oracle | mongodb
+#    engine: postgresql        # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
 #    host: 10.10.1.20
 #    port: 5432
 #    database: corebank

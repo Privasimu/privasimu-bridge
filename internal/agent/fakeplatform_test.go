@@ -356,16 +356,16 @@ func (f *fakePlatform) poll(w http.ResponseWriter, body []byte, token string, pr
 		ServerTime: time.Now().UTC(), PlatformFeatures: features})
 }
 
-// packagesKind reports whether this platform accepts inventory entries of kind packages.
-func (f *fakePlatform) packagesKind() bool {
+// featureList returns the platform_features of this platform.
+func (f *fakePlatform) featureList() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Contains(f.features, FeatureSourceKindPackages)
+	return append([]string(nil), f.features...)
 }
 
 func (f *fakePlatform) putSources(w http.ResponseWriter, body []byte) {
 	m, ok := object(body)
-	if !ok || !validInventory(m, f.packagesKind()) {
+	if !ok || !validInventory(m, f.featureList()) {
 		f.refuse(w, ErrInvalidRequest)
 		return
 	}
@@ -583,7 +583,10 @@ func agentInfoError(m map[string]any) string {
 
 // validInventory checks a PUT /sources body (section 5.3). packagesKind is whether the
 // platform implements revision 3; an older one refuses the whole inventory on kind packages.
-func validInventory(m map[string]any, packagesKind bool) bool {
+// validInventory checks an inventory as a platform with these platform_features does: kind
+// packages only with source_kind:packages (revision 3), and a database engine beyond
+// revision 2 only with "source_engine:<engine>" (revision 4).
+func validInventory(m map[string]any, features []string) bool {
 	sources, isList := m["sources"].([]any)
 	if !word(m["sources_digest"], reDigest) || !isList || len(sources) > 200 {
 		return false
@@ -597,8 +600,10 @@ func validInventory(m map[string]any, packagesKind bool) bool {
 		id, _ := s["id"].(string)
 		kind, _ := s["kind"].(string)
 		engine, _ := s["engine"].(string)
-		if !reID.MatchString(id) || seen[id] || !slices.Contains(sourceEngines[kind], engine) || !text(s["label"], 1, 128) ||
-			(kind == "packages" && !packagesKind) {
+		known := slices.Contains(sourceEngines[kind], engine) ||
+			(kind == "database" && slices.Contains(features, FeatureSourceEnginePrefix+engine))
+		if !reID.MatchString(id) || seen[id] || !known || !text(s["label"], 1, 128) ||
+			(kind == "packages" && !slices.Contains(features, FeatureSourceKindPackages)) {
 			return false
 		}
 		seen[id] = true
