@@ -56,6 +56,9 @@ server:
   # Optional file-root endpoints (/ext/v1/...): a proposed extension that Privasimu does
   # not call yet. Off by default.
   file_endpoints: false
+  # Optional /ext/v1/table-access (who can read a table of a source with access_inventory):
+  # a proposed extension that Privasimu does not call yet. Off by default.
+  access_endpoint: false
   limits:
     max_body_bytes: 64KiB
     rate_per_second: 100            # per client address; a scan sends up to 4 calls at once
@@ -116,6 +119,9 @@ sources:
       rows: 100
       min_matches: 3
       ratio: 0.2
+    # Who can read each table with personal data: counts and group role names, never
+    # account names (PostgreSQL, MySQL, MariaDB; see the install guide, section 7.2).
+    access_inventory: true
     # Mode A: what is typed in Privasimu for this source. Defaults to host and database
     # above; an alias keeps the real address out of Privasimu.
     match:

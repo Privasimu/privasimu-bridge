@@ -149,6 +149,9 @@ func (c *Config) validateSource(p *problems, i int) {
 		return
 	}
 	if CloudEngine(s.Engine) {
+		if s.AccessInventory {
+			p.add("config.access_engine", at+".access_inventory")
+		}
 		validateCloudSource(p, at, s)
 		return
 	}
@@ -158,6 +161,9 @@ func (c *Config) validateSource(p *problems, i int) {
 		if set {
 			p.add("config.cloud_field", at+"."+name)
 		}
+	}
+	if s.AccessInventory && s.Engine != "postgresql" && s.Engine != "mysql" {
+		p.add("config.access_engine", at+".access_inventory")
 	}
 	mongoURI := s.Engine == "mongodb" && s.URI.IsSet()
 	if !mongoURI {

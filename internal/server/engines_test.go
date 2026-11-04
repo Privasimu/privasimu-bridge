@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/privasimu/bridge/internal/config"
+	"github.com/privasimu/bridge/internal/dbsource"
 )
 
 // The engines beyond the platform's registry (Redshift, ClickHouse) are served from a
@@ -60,5 +61,28 @@ func TestSnowflakeFromAConfiguredSource(t *testing.T) {
 	got := h.db.LastTarget()
 	if got.Engine != "snowflake" || got.PrivateKey.Reveal() != localPassword || got.Password.Reveal() != "" || got.Warehouse != "scan_wh" {
 		t.Fatalf("the configured source's own credentials must be used: %s %s", got.Engine, got.Warehouse)
+	}
+}
+
+func TestTableAccessEndpoint(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.Server.AccessEndpoint = true
+		c.Sources[0].AccessInventory = true
+	})
+	h.db.Access = map[string]dbsource.Access{"users": {Readers: 4, Roles: []string{"crm_reader"}, RolesTotal: 1, Admins: 1, Complete: true}}
+	resp, body := h.post(PathTableAccess, h.body(map[string]any{"table_name": "users"}), nil)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"access":{"readers":4,"roles":["crm_reader"],"roles_total":1,"admins":1,"public":false,"complete":true}`)) {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if resp, _ := h.post(PathTableAccess, h.body(map[string]any{"table_name": "nope"}), nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown table: %d", resp.StatusCode)
+	}
+	off := newHarness(t, nil)
+	if resp, _ := off.post(PathTableAccess, off.body(map[string]any{"table_name": "users"}), nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("the endpoint is off by default: %d", resp.StatusCode)
+	}
+	notOptedIn := newHarness(t, func(c *config.Config) { c.Server.AccessEndpoint = true })
+	if resp, _ := notOptedIn.post(PathTableAccess, notOptedIn.body(map[string]any{"table_name": "users"}), nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("a source without access_inventory: %d", resp.StatusCode)
 	}
 }

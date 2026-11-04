@@ -34,6 +34,7 @@ var catalog = map[string][2]string{
 	"config.snowflake_field":      {"%s is only used by Snowflake sources", "%s hanya dipakai oleh sumber Snowflake"},
 	"config.nlp_endpoint":         {"%s must be an http:// or https:// URL of a service on this server or the internal network (a host name, or a loopback or private address), without credentials, query or fragment", "%s harus URL http:// atau https:// layanan di server ini atau jaringan internal (nama host, atau alamat loopback atau privat), tanpa kredensial, query, atau fragmen"},
 	"config.nlp_limits":           {"%s: timeout 1s-60s, min_chars 20-100000, max_bytes 1KiB-1MiB, min_score 0-1 and concurrency 1-16", "%s: timeout 1s-60s, min_chars 20-100000, max_bytes 1KiB-1MiB, min_score 0-1, dan concurrency 1-16"},
+	"config.access_engine":        {"%s is available for PostgreSQL, MySQL and MariaDB sources only", "%s hanya tersedia untuk sumber PostgreSQL, MySQL, dan MariaDB"},
 	"config.cloud_tls":            {"%s must be verify-full: a cloud service is always reached over verified TLS", "%s harus verify-full: layanan cloud selalu dijangkau lewat TLS yang diverifikasi"},
 	"config.snowflake_auth":       {"%s needs exactly one of private_key (a key pair) and password (a programmatic access token)", "%s memerlukan tepat satu dari private_key (pasangan kunci) dan password (programmatic access token)"},
 	"config.project":              {"%s must be a Google Cloud project id (6-30 lower-case letters, digits and -)", "%s harus id proyek Google Cloud (6-30 huruf kecil, angka, dan -)"},

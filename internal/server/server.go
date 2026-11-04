@@ -141,7 +141,8 @@ func (s *Server) clientIP(r *http.Request) netip.Addr {
 // rawEndpoints are paths other bridges serve that return rows or raw values. They do not
 // exist here; a request for one is answered 404 and audited, because it means a client
 // expects data this bridge never sends.
-var rawEndpoints = []string{"/scan-table", "/scan-database", "/scan-file", "/scan-database-columns", "/scan-rows", "/sample"}
+var rawEndpoints = []string{"/scan-table", "/scan-database", "/scan-file", "/scan-database-columns", "/scan-rows", "/sample",
+	"/scan-remote-document", "/scan-access", "/scan-access-s3", "/scan-access-application"}
 
 func isRawEndpoint(path string) bool {
 	for _, e := range rawEndpoints {
@@ -217,6 +218,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ev.Endpoint = path
 		status = s.serveV1(w, r, path, ip, &ev)
 		return
+	case PathTableAccess:
+		if s.cfg.Server.AccessEndpoint {
+			ev.Endpoint = path
+			status = s.serveV1(w, r, path, ip, &ev)
+			return
+		}
 	case PathFileRoots, PathFileRootReport, PathFileRootScan:
 		if s.files != nil && s.cfg.Server.FileEndpoints {
 			ev.Endpoint = path
@@ -272,7 +279,7 @@ func (s *Server) serveV1(w http.ResponseWriter, r *http.Request, path string, ip
 	}
 	req, aerr := decodeV1(http.MaxBytesReader(w, r.Body, int64(s.cfg.Server.Limits.MaxBodyBytes)))
 	if aerr == nil {
-		aerr = req.validate(path == PathTableColumns)
+		aerr = req.validate(path == PathTableColumns || path == PathTableAccess)
 	}
 	if aerr != nil {
 		ev.Code = aerr.code
@@ -287,9 +294,12 @@ func (s *Server) serveV1(w http.ResponseWriter, r *http.Request, path string, ip
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Server.Limits.RequestTimeout.D())
 	defer cancel()
 	var resp any
-	if path == PathTableNames {
+	switch path {
+	case PathTableNames:
 		resp, aerr = s.tableNames(ctx, req, ev)
-	} else {
+	case PathTableAccess:
+		resp, aerr = s.tableAccess(ctx, req, ev)
+	default:
 		resp, aerr = s.tableColumns(ctx, req, ev)
 	}
 	if aerr != nil {

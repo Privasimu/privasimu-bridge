@@ -413,7 +413,7 @@ func (f *fakePlatform) jobAction(w http.ResponseWriter, r *http.Request, rest st
 		jobType = j.job.Type
 	}
 	f.mu.Unlock()
-	if !ok || !validJobBody(action, m) || !validForJob(jobType, action, m) {
+	if !ok || !validJobBody(action, m) || !validForJob(jobType, action, m) || !f.accessAccepted(action, m) {
 		if action == "progress" || action == "parts" || action == "complete" || action == "fail" {
 			f.refuse(w, ErrInvalidRequest)
 		} else {
@@ -785,4 +785,34 @@ func (f *fakePlatform) items(id string) []json.RawMessage {
 		out = append(out, p.Items...)
 	}
 	return out
+}
+
+// accessAccepted refuses table items with "access" (revision 4, proposal) unless this
+// platform listed table_access, and checks the shape when it did: counts, a list of at most
+// 20 role names, booleans, nothing else.
+func (f *fakePlatform) accessAccepted(action string, m map[string]any) bool {
+	if action != "parts" || m["kind"] != PartTables {
+		return true
+	}
+	accepted := slices.Contains(f.featureList(), FeatureTableAccess)
+	for _, it := range m["items"].([]any) {
+		item, _ := it.(map[string]any)
+		raw, has := item["access"]
+		if !has {
+			continue
+		}
+		a, isObject := raw.(map[string]any)
+		if !accepted || !isObject || !keysExactly(a, []string{"readers", "roles", "roles_total", "admins", "public", "complete"}) ||
+			!integer(a["readers"], 0, 1<<31) || !integer(a["roles_total"], 0, 1<<31) || !integer(a["admins"], 0, 1<<31) ||
+			!stringList(a["roles"], 20, func(s string) bool { return text(s, 1, 255) }) {
+			return false
+		}
+		if _, ok := a["public"].(bool); !ok {
+			return false
+		}
+		if _, ok := a["complete"].(bool); !ok {
+			return false
+		}
+	}
+	return true
 }

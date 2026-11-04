@@ -23,6 +23,9 @@ import (
 func TestJobsAgainstRealDatabases(t *testing.T) {
 	for _, engine := range config.Engines {
 		t.Run(engine, func(t *testing.T) {
+			if config.CloudEngine(engine) {
+				t.Skip("the cloud warehouses need settings beyond BRIDGE_IT_*; they are covered by fakes of their APIs")
+			}
 			s, ok := itenv.Lookup(engine)
 			if !ok {
 				t.Skipf("BRIDGE_IT_%s_HOST is not set", strings.ToUpper(engine))
@@ -47,11 +50,14 @@ func TestJobsAgainstRealDatabases(t *testing.T) {
 				if s.Schema != "" {
 					src.Schemas = []string{s.Schema}
 				}
+				src.AccessInventory = engine == "postgresql" || engine == "mysql"
 				c.Sources = []config.SourceConfig{src}
 			})
 			e.enroll()
 			if !slices.Contains(config.ProtocolEngines, engine) {
-				e.fp.setFeatures([]string{FeatureSourceEnginePrefix + engine}) // a platform of revision 4
+				e.fp.setFeatures([]string{FeatureSourceEnginePrefix + engine, FeatureTableAccess}) // a platform of revision 4
+			} else {
+				e.fp.setFeatures([]string{FeatureTableAccess})
 			}
 			e.fp.enqueue(Job{JobID: "job-test", Type: JobTestSource, SourceID: "real"})
 			e.fp.enqueue(Job{JobID: "job-scan", Type: JobScanDatabase, SourceID: "real"})
@@ -99,8 +105,11 @@ func TestJobsAgainstRealDatabases(t *testing.T) {
 			if c := cols["notes"]; !c.PII || c.Category != "phone" || !c.Shadow || c.ProtectionState != "plaintext" {
 				t.Fatalf("notes: %+v", c)
 			}
+			if src, _ := e.cfg.Source("real"); src.AccessInventory && (customers.Access == nil || (engine == "postgresql" && !customers.Access.Complete)) {
+				t.Fatalf("the access inventory of customers: %+v", customers.Access)
+			}
 			body := e.fp.allBodies()
-			for _, v := range append(itenv.FixtureValues, s.Password) {
+			for _, v := range append(itenv.FixtureValues, s.Password, "analyst1", "app_user") {
 				if v != "" && bytes.Contains(body, []byte(v)) {
 					t.Fatal("a value or the password reached the platform")
 				}

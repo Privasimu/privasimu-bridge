@@ -12,6 +12,9 @@
 //	BRIDGE_IT_<ENGINE>_CA_FILE    CA certificate (PEM) for verify-ca and verify-full
 //	BRIDGE_IT_<ENGINE>_SERVER_NAME  the name in the server certificate, when not the host
 //	BRIDGE_IT_<ENGINE>_SERVICE    Oracle service name
+//	BRIDGE_IT_<ENGINE>_ACCESS_USER, _ACCESS_PASSWORD
+//	                              optional (MySQL, MariaDB): an account that may read the
+//	                              grant tables, for a complete access inventory
 //	BRIDGE_IT_<ENGINE>_WRITER_USER, _WRITER_PASSWORD
 //	                              optional: an account that may write, to show that the
 //	                              bridge's sessions stay read-only even then
@@ -41,7 +44,10 @@ type Settings struct {
 	ServerName string
 	Service    string
 	// WriterUser and WriterPassword name an account with write privileges (optional).
-	WriterUser     string
+	WriterUser string
+	// AccessUser and AccessPassword name an account that may read the grant tables.
+	AccessUser     string
+	AccessPassword string
 	WriterPassword string
 }
 
@@ -51,7 +57,8 @@ func Lookup(engine string) (Settings, bool) {
 	get := func(k string) string { return os.Getenv(prefix + k) }
 	s := Settings{Engine: engine, Host: get("HOST"), Database: get("DB"), User: get("USER"), Password: get("PASSWORD"),
 		Schema: get("SCHEMA"), TLS: get("TLS"), CAFile: get("CA_FILE"), ServerName: get("SERVER_NAME"),
-		Service: get("SERVICE"), WriterUser: get("WRITER_USER"), WriterPassword: get("WRITER_PASSWORD")}
+		Service: get("SERVICE"), WriterUser: get("WRITER_USER"), WriterPassword: get("WRITER_PASSWORD"),
+		AccessUser: get("ACCESS_USER"), AccessPassword: get("ACCESS_PASSWORD")}
 	s.Port, _ = strconv.Atoi(get("PORT"))
 	return s, s.Host != ""
 }

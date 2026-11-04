@@ -47,6 +47,9 @@ const (
 	// database inventory entries of that engine beyond the five of revision 2
 	// ("source_engine:redshift", "source_engine:clickhouse", ...).
 	FeatureSourceEnginePrefix = "source_engine:"
+	// FeatureTableAccess (revision 4, proposal): the platform stores "access" in the items
+	// of a tables part (who can read a table with personal data: counts and role names).
+	FeatureTableAccess = "table_access"
 )
 
 // Error codes the platform returns in {"error": {"code": ...}}. The status and the exact
@@ -330,6 +333,9 @@ type TableItem struct {
 	Sampled        bool         `json:"sampled"`
 	SamplingError  string       `json:"sampling_error,omitempty"`
 	Columns        []ColumnItem `json:"columns"`
+	// Access (revision 4, proposal) is sent only to a platform that lists table_access, for
+	// tables with personal data of sources with access_inventory.
+	Access *TableAccess `json:"access,omitempty"`
 }
 
 // ColumnItem is one column of a table item: metadata and the finding, never a value.
@@ -352,4 +358,15 @@ type ContentCount struct {
 	Sampled  int            `json:"sampled"`
 	Matching int            `json:"matching"`
 	Matches  map[string]int `json:"matches,omitempty"`
+}
+
+// TableAccess tells who can read a table (revision 4, proposal): counts and group role
+// names only, never the names of login accounts.
+type TableAccess struct {
+	Readers    int      `json:"readers"`
+	Roles      []string `json:"roles"`
+	RolesTotal int      `json:"roles_total"`
+	Admins     int      `json:"admins"`
+	Public     bool     `json:"public"`
+	Complete   bool     `json:"complete"`
 }

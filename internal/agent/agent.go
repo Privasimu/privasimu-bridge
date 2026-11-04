@@ -221,6 +221,9 @@ func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, feat
 		if cfg.SamplingFor(src).On() {
 			caps = append(caps, "sampling")
 		}
+		if src.AccessInventory && slices.Contains(features, FeatureTableAccess) {
+			caps = append(caps, "access")
+		}
 		out = append(out, Source{ID: src.ID, Kind: "database", Engine: src.Engine, Label: labelOf(src.Label, src.ID), Description: src.Description, Capabilities: caps})
 	}
 	if fs != nil {
@@ -269,7 +272,7 @@ func Withheld(cfg *config.Config, features []string) []string {
 func inventoryFeatures(all []string) []string {
 	out := []string{}
 	for _, f := range all {
-		if f == FeatureSourceKindPackages || strings.HasPrefix(f, FeatureSourceEnginePrefix) {
+		if f == FeatureSourceKindPackages || f == FeatureTableAccess || strings.HasPrefix(f, FeatureSourceEnginePrefix) {
 			out = append(out, f)
 		}
 	}
@@ -566,4 +569,12 @@ func Enroll(ctx context.Context, cfg *config.Config, r *secrets.Resolver, c *Cli
 		return resp, err
 	}
 	return resp, nil
+}
+
+// platformHas reports whether the last poll answer listed a feature that shapes what the
+// agent sends (inventoryFeatures).
+func (a *Agent) platformHas(feature string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Contains(a.features, feature)
 }

@@ -35,17 +35,20 @@ type Config struct {
 
 // ServerConfig configures mode A: the HTTPS server the platform calls.
 type ServerConfig struct {
-	Listen         string           `yaml:"listen"`
-	PublicURL      string           `yaml:"public_url"`
-	BasePath       string           `yaml:"base_path"`
-	TLS            ServerTLS        `yaml:"tls"`
-	AllowedClients []string         `yaml:"allowed_clients"`
-	TrustedProxies []string         `yaml:"trusted_proxies"`
-	APIKeys        []APIKey         `yaml:"api_keys"`
-	Credentials    string           `yaml:"credentials"`
-	AllowedTargets []string         `yaml:"allowed_targets"`
-	TargetsCAFile  string           `yaml:"targets_ca_file"`
-	FileEndpoints  bool             `yaml:"file_endpoints"`
+	Listen         string    `yaml:"listen"`
+	PublicURL      string    `yaml:"public_url"`
+	BasePath       string    `yaml:"base_path"`
+	TLS            ServerTLS `yaml:"tls"`
+	AllowedClients []string  `yaml:"allowed_clients"`
+	TrustedProxies []string  `yaml:"trusted_proxies"`
+	APIKeys        []APIKey  `yaml:"api_keys"`
+	Credentials    string    `yaml:"credentials"`
+	AllowedTargets []string  `yaml:"allowed_targets"`
+	TargetsCAFile  string    `yaml:"targets_ca_file"`
+	FileEndpoints  bool      `yaml:"file_endpoints"`
+	// AccessEndpoint serves /ext/v1/table-access (a proposal, off by default): who can read a
+	// table of a source with access_inventory, as counts and role names.
+	AccessEndpoint bool             `yaml:"access_endpoint"`
 	Limits         ServerLimits     `yaml:"limits"`
 	Sampling       *SamplingOptions `yaml:"sampling"`
 }
@@ -139,6 +142,9 @@ type SourceConfig struct {
 	Sampling    *SamplingOptions `yaml:"sampling"`
 	Match       SourceMatch      `yaml:"match"`
 	Timeout     Duration         `yaml:"timeout"`
+	// AccessInventory also reports who can read each table with personal data: counts and
+	// group role names, never account names (PostgreSQL, MySQL, MariaDB).
+	AccessInventory bool `yaml:"access_inventory"`
 
 	// Cloud warehouses. Warehouse: the Snowflake warehouse (needed for sampling only) or the
 	// Databricks SQL warehouse id (its HTTP path is accepted too). Role: the Snowflake role.

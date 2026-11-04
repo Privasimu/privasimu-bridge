@@ -139,3 +139,15 @@ func TestNLPEndpointMustBeLocalOrPrivate(t *testing.T) {
 		t.Errorf("defaults: %+v", n)
 	}
 }
+
+func TestAccessInventoryEngines(t *testing.T) {
+	for engine, ok := range map[string]bool{"postgresql": true, "mysql": true, "mariadb": true, "mssql": false, "oracle": false} {
+		c, err := Parse([]byte("sources:\n  - {id: x, engine: " + engine + ", host: h, database: d, username: u, password: \"secret:p\", access_inventory: true}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("%s: accepted %v, want %v (%v)", engine, err == nil, ok, err)
+		}
+	}
+}
