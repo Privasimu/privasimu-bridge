@@ -309,7 +309,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO privasimu_ro;
 Redshift has no read-only session setting: give this account no other privilege. The
 bridge sets `statement_timeout` for every session (the source's `timeout`) and samples
 inside `BEGIN READ ONLY` transactions. Use `tls: {mode: verify-full}`; the Amazon
-certificate authorities are in the system trust store. Redshift reports no row counts.
+certificate authorities are in the system trust store. Without it the default, `prefer`,
+does not verify the certificate (and accepts an unencrypted connection), and `check` warns
+about it. Redshift reports no row counts.
 
 **ClickHouse** (HTTP interface: port 8123, or 8443 with TLS)
 ```sql
@@ -322,7 +324,9 @@ server-side time limit (`max_execution_time`, the source's `timeout`) and, for s
 a row limit. Do not give this user a profile with `readonly = 1`: it forbids those limits
 (`readonly = 2`, or no setting, is right). In ClickHouse a database is a schema: the source's
 `database` is listed, or the databases in `schemas`. Use the HTTPS port with
-`tls: {mode: verify-full}` wherever ClickHouse has a certificate.
+`tls: {mode: verify-full}` wherever ClickHouse has a certificate: without a TLS mode the
+bridge speaks plain HTTP, so the password (the `X-ClickHouse-Key` header) and the catalog
+cross the network unencrypted, and `check` warns about it.
 
 Redshift and ClickHouse sources are offered to Privasimu in mode B once Privasimu accepts
 these engines (agent protocol revision 4); until then the agent logs that it withholds
@@ -404,6 +408,10 @@ GRANT SELECT ON CATALOG main TO `privasimu-bridge`;       -- only for local samp
     username: 9f1c…-application-id # omit for a personal access token
     password: "secret:dbx_secret"
 ```
+Databricks itself cancels any bridge statement still running after the source's `timeout`
+(at least 5 s, at most 50 s), so none keeps running when the bridge stops. A stopped
+warehouse that needs longer to start fails the scan with a timeout: keep it running, or
+start it before scanning.
 
 **Amazon Athena** (catalog only: every Athena query writes its result to S3, so the bridge
 never samples Athena). An IAM user or role with this policy (narrow the resources):
@@ -484,12 +492,18 @@ network, the bridge can ask it:
 detection:
   nlp:
     enabled: true
-    endpoint: "http://127.0.0.1:8333/"   # your service; loopback or private addresses only
+    endpoint: "http://127.0.0.1:8333/"   # on this server; elsewhere in your network: https://
 ```
 
 - The text goes **to your service only**: every connection is checked against loopback and
   private ranges and pinned to that address, without a proxy or redirect. The bridge keeps
   only the counts per category; the platform sees categories and counts as before.
+- **Plain `http://` only on this server** (`localhost` or a loopback address): text never
+  crosses the network unencrypted. A service on another machine needs `https://` (with
+  `ca_file` for your internal CA), for example `https://nlp.internal.example.co.id/`.
+- The shared address space `100.64.0.0/10` (carrier-grade NAT) is refused unless you set
+  `allow_cgnat: true`: clouds keep their own services there. Alibaba Cloud's metadata
+  address `100.100.100.200` is never reached, whatever the setting.
 - What is sent: sampled values of a column that have at least `min_chars` (200)
   characters, at most `max_bytes` (32 KiB) per column, and the first `max_bytes` of a file's
   text. It needs sampling to be on for databases; files are always examined when

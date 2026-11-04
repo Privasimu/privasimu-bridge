@@ -160,6 +160,26 @@ func TestOnlyLocalAndPrivateAddressesAreReached(t *testing.T) {
 	if _, err := c.Count(context.Background(), []string{"Budi Contoh"}); err == nil {
 		t.Fatal("a redirect must not be followed")
 	}
+	// Plain http reaches this server only: text never crosses the network unencrypted.
+	c = client(t, "http://10.20.0.5:8333/", 0)
+	if _, err := c.Count(context.Background(), []string{"Budi Contoh"}); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("a private address over plain http must be refused before connecting: %v", err)
+	}
+	// The shared address space is opt-in, and its cloud metadata address is never reached.
+	for _, cgnat := range []bool{false, true} {
+		cfg, err := config.Parse([]byte("detection:\n  nlp: {enabled: true, endpoint: \"https://100.100.100.200/\", timeout: 2s}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Detection.NLP.AllowCGNAT = cgnat
+		c, err := New(cfg, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Count(context.Background(), []string{"Budi Contoh"}); err == nil || !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("allow_cgnat %v: the metadata address must be refused before connecting: %v", cgnat, err)
+		}
+	}
 }
 
 func TestOffIsNil(t *testing.T) {

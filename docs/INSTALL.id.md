@@ -317,7 +317,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO privasimu_ro;
 Redshift tidak punya pengaturan sesi hanya-baca: jangan beri akun ini izin lain. Bridge
 memasang `statement_timeout` di setiap sesi (`timeout` sumber) dan mengambil sampel di dalam
 transaksi `BEGIN READ ONLY`. Pakai `tls: {mode: verify-full}`; otoritas sertifikat Amazon
-sudah ada di penyimpanan sertifikat sistem. Redshift tidak melaporkan jumlah baris.
+sudah ada di penyimpanan sertifikat sistem. Tanpa itu, bawaan `prefer` tidak memverifikasi
+sertifikat (dan menerima koneksi tanpa enkripsi), dan `check` memberi peringatan. Redshift
+tidak melaporkan jumlah baris.
 
 **ClickHouse** (antarmuka HTTP: port 8123, atau 8443 dengan TLS)
 ```sql
@@ -331,7 +333,9 @@ sampling, batas baris. Jangan beri pengguna ini profil dengan `readonly = 1`: pr
 melarang batas-batas tersebut (`readonly = 2`, atau tanpa pengaturan, sudah tepat). Di
 ClickHouse, database adalah skema: yang didaftar adalah `database` sumber, atau database di
 `schemas`. Pakai port HTTPS dengan `tls: {mode: verify-full}` bila ClickHouse punya
-sertifikat.
+sertifikat: tanpa mode TLS bridge memakai HTTP biasa, sehingga password (header
+`X-ClickHouse-Key`) dan katalog melintasi jaringan tanpa enkripsi, dan `check` memberi
+peringatan.
 
 Sumber Redshift dan ClickHouse ditawarkan ke Privasimu di mode B setelah Privasimu menerima
 mesin ini (protokol agen revisi 4); sebelum itu agen mencatat di log bahwa sumber itu
@@ -413,6 +417,11 @@ GRANT SELECT ON CATALOG main TO `privasimu-bridge`;       -- hanya untuk samplin
     username: 9f1c…-application-id # kosongkan untuk personal access token
     password: "secret:dbx_secret"
 ```
+Databricks sendiri membatalkan setiap pernyataan bridge yang masih berjalan setelah
+`timeout` sumber (paling cepat 5 detik, paling lama 50 detik), sehingga tidak ada yang
+terus berjalan ketika bridge berhenti. Warehouse yang sedang mati dan butuh waktu lebih
+lama untuk menyala membuat pemindaian gagal karena timeout: biarkan tetap menyala, atau
+nyalakan sebelum memindai.
 
 **Amazon Athena** (katalog saja: setiap kueri Athena menulis hasilnya ke S3, sehingga bridge
 tidak pernah mengambil sampel Athena). Pengguna atau peran IAM dengan kebijakan ini
@@ -493,12 +502,18 @@ server bridge atau di dalam jaringan Anda, bridge dapat memintanya:
 detection:
   nlp:
     enabled: true
-    endpoint: "http://127.0.0.1:8333/"   # layanan Anda; hanya alamat loopback atau privat
+    endpoint: "http://127.0.0.1:8333/"   # di server ini; di tempat lain dalam jaringan Anda: https://
 ```
 
 - Teks hanya dikirim **ke layanan Anda**: setiap koneksi diperiksa terhadap rentang loopback
   dan privat lalu dikunci ke alamat itu, tanpa proxy maupun redirect. Bridge hanya menyimpan
   jumlah per kategori; platform melihat kategori dan jumlah seperti biasa.
+- **`http://` biasa hanya di server ini** (`localhost` atau alamat loopback): teks tidak
+  pernah melintasi jaringan tanpa enkripsi. Layanan di mesin lain memerlukan `https://`
+  (dengan `ca_file` untuk CA internal Anda), misalnya `https://nlp.internal.example.co.id/`.
+- Ruang alamat bersama `100.64.0.0/10` (carrier-grade NAT) ditolak kecuali Anda mengatur
+  `allow_cgnat: true`: penyedia cloud menempatkan layanan mereka sendiri di sana. Alamat
+  metadata Alibaba Cloud `100.100.100.200` tidak pernah dijangkau, apa pun pengaturannya.
 - Yang dikirim: nilai sampel sebuah kolom yang panjangnya minimal `min_chars` (200)
   karakter, paling banyak `max_bytes` (32 KiB) per kolom, dan `max_bytes` pertama teks
   sebuah berkas. Untuk basis data, sampling harus aktif; berkas selalu diperiksa bila

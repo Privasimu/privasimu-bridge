@@ -4,7 +4,8 @@
 // "start", "end", ...}]}, offsets in characters.
 //
 // The service must run on the bridge server or inside the client's network: every
-// connection is checked against loopback and private ranges (config.NLPRanges) and pinned
+// connection is checked against config.NLPConfig.Ranges (loopback for http://; loopback and
+// private ranges for https://, the shared address space only with allow_cgnat) and pinned
 // to the checked address, no proxy and no redirect are used. Only the text of one file or
 // one column, bounded by max_bytes, is sent per request, and only the counts per category
 // are kept: the entity texts the service returns are not even decoded. When the service
@@ -94,7 +95,8 @@ func New(cfg *config.Config, log *slog.Logger) (*Client, error) {
 	if !n.Enabled {
 		return nil, nil
 	}
-	guard, err := netguard.New(config.NLPRanges)
+	// Over plain http the text may only reach this server; over https the private ranges too.
+	guard, err := netguard.New(n.Ranges())
 	if err != nil {
 		return nil, err
 	}

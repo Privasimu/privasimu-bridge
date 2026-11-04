@@ -111,11 +111,16 @@ sources:
 func TestNLPEndpointMustBeLocalOrPrivate(t *testing.T) {
 	for endpoint, ok := range map[string]bool{
 		"http://127.0.0.1:8333/":                true,
-		"http://localhost:8333/":                true, // a name is checked when connecting
-		"https://nlp.internal.example.co.id/v1": true,
-		"http://10.20.0.5:8333/":                true,
+		"http://localhost:8333/":                true, // reached on loopback only (checked when connecting)
 		"http://[::1]:8333/":                    true,
+		"https://nlp.internal.example.co.id/v1": true, // a name is checked when connecting
+		"https://10.20.0.5:8333/":               true,
+		"http://10.20.0.5:8333/":                false, // text over plain http leaves this server only
+		"http://nlp.internal.example.co.id/":    false,
+		"https://100.64.1.2/":                   false, // shared address space: only with allow_cgnat
+		"https://100.100.100.200/":              false,
 		"http://203.0.113.10:8333/":             false,
+		"https://203.0.113.10:8333/":            false,
 		"http://169.254.169.254/":               false,
 		"ftp://127.0.0.1/":                      false,
 		"http://user:pass@127.0.0.1/":           false,
@@ -128,6 +133,12 @@ func TestNLPEndpointMustBeLocalOrPrivate(t *testing.T) {
 		}
 		if err := c.Validate(); (err == nil) != ok {
 			t.Errorf("%q: accepted %v, want %v (%v)", endpoint, err == nil, ok, err)
+		}
+	}
+	for endpoint, ok := range map[string]bool{"https://100.64.1.2/": true, "http://100.64.1.2/": false} {
+		c, _ := Parse([]byte("detection:\n  nlp: {enabled: true, allow_cgnat: true, endpoint: \"" + endpoint + "\"}\n"))
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("allow_cgnat %q: accepted %v, want %v (%v)", endpoint, err == nil, ok, err)
 		}
 	}
 	c, _ := Parse([]byte("detection:\n  nlp: {enabled: true, endpoint: \"http://127.0.0.1:8333/\", timeout: 5m}\n"))

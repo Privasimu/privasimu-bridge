@@ -312,10 +312,12 @@ func TestScanPackagesFailures(t *testing.T) {
 			}
 		})
 	}
-	// A tool that fails or times out may be retried.
+	// A tool that fails or times out may be retried. The deadline leaves time for the
+	// checks before the tool starts on a busy machine; a deadline that passes even before
+	// the start is a timeout too (packages.execute).
 	e := newPackagesEnv(t, packagesYAML, nil)
-	_ = faketools.Write(e.home, faketools.Control{"syft": {SleepMS: 5000}})
-	j := e.runJob(Job{JobID: "j6", Type: JobScanPackages, SourceID: "web-01", Options: JobOptions{Refresh: true, DeadlineSeconds: 1}}, 15*time.Second)
+	_ = faketools.Write(e.home, faketools.Control{"syft": {SleepMS: 20000}})
+	j := e.runJob(Job{JobID: "j6", Type: JobScanPackages, SourceID: "web-01", Options: JobOptions{Refresh: true, DeadlineSeconds: 4}}, 40*time.Second)
 	if j.failed == nil || j.failed.ErrorCode != FailToolTimeout || j.failed.ErrorKind != "timeout" || !j.failed.Retryable {
 		t.Fatalf("%+v", j.failed)
 	}

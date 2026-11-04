@@ -316,13 +316,38 @@ func validateCloudSource(p *problems, at string, s *SourceConfig) {
 	}
 }
 
-// NLPRanges are the addresses an NLP endpoint may resolve to: loopback and private ranges
-// (the service runs on this server or inside the client's network, never outside it).
-var NLPRanges = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"}
+// The addresses an NLP endpoint may resolve to (the service runs on this server or inside
+// the client's network, never outside it). Text sent over plain http:// stays on this
+// server: http endpoints may reach loopback only. https endpoints may also reach the private
+// ranges, and the shared address space only on request.
+var (
+	// NLPLoopback is this server.
+	NLPLoopback = []string{"127.0.0.0/8", "::1/128"}
+	// NLPPrivate are the private ranges of the client's network (https only).
+	NLPPrivate = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
+)
 
-// validateNLP checks the optional NLP service: an http(s) URL without credentials, query or
-// fragment, whose host is a name (checked when connecting) or an address in NLPRanges, and
-// bounded limits.
+// NLPSharedAddressSpace is 100.64.0.0/10 (RFC 6598, carrier-grade NAT), allowed for https
+// endpoints only with detection.nlp.allow_cgnat: clouds use it for their own services, such
+// as Alibaba Cloud's metadata at 100.100.100.200 (which netguard never reaches).
+const NLPSharedAddressSpace = "100.64.0.0/10"
+
+// Ranges returns the addresses the configured endpoint may resolve to.
+func (n NLPConfig) Ranges() []string {
+	out := append([]string(nil), NLPLoopback...)
+	if u, err := url.Parse(n.Endpoint); err != nil || u.Scheme != "https" {
+		return out
+	}
+	out = append(out, NLPPrivate...)
+	if n.AllowCGNAT {
+		out = append(out, NLPSharedAddressSpace)
+	}
+	return out
+}
+
+// validateNLP checks the optional NLP service: an https:// URL (http:// only on this
+// server: localhost or a loopback address) without credentials, query or fragment, whose
+// host is a name (checked when connecting) or an address in Ranges, and bounded limits.
 func validateNLP(p *problems, n *NLPConfig) {
 	if !n.Enabled {
 		return
@@ -331,15 +356,18 @@ func validateNLP(p *problems, n *NLPConfig) {
 	ok := err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" &&
 		u.Fragment == "" && !hasControl(n.Endpoint)
 	if ok {
-		if a, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]")); err == nil {
+		host := strings.Trim(u.Hostname(), "[]")
+		if a, err := netip.ParseAddr(host); err == nil {
 			ok = false
-			for _, r := range NLPRanges {
+			for _, r := range n.Ranges() {
 				if pfx, _ := netip.ParsePrefix(r); pfx.Contains(a.Unmap()) {
 					ok = true
 				}
 			}
-		} else if !hostPattern.MatchString(u.Hostname()) {
+		} else if !hostPattern.MatchString(host) {
 			ok = false
+		} else if u.Scheme == "http" && !strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
+			ok = false // a name over plain http could be anywhere on the network
 		}
 	}
 	if !ok {

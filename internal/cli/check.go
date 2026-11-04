@@ -121,6 +121,7 @@ func (c *checker) checkSecrets(cfg *config.Config, r *secrets.Resolver) {
 }
 
 func (c *checker) checkSource(ctx context.Context, cfg *config.Config, src *config.SourceConfig, r *secrets.Resolver) {
+	c.warnTransport(src)
 	t, err := dbsource.FromSource(src, r.Resolve)
 	if err != nil {
 		c.fail("cli.check.source_secret", src.ID, errMessage(err))
@@ -148,8 +149,23 @@ func (c *checker) checkSource(ctx context.Context, cfg *config.Config, src *conf
 		sampling = i18n.T("cli.check.sampling_on", cfg.SamplingFor(src).Rows)
 	}
 	c.ok("cli.check.source_ok", src.ID, conn.ServerVersion(sctx), len(tables), tlsState, sampling)
-	if src.TLS.Mode == config.DBTLSPrefer || src.TLS.Mode == config.DBTLSRequire {
-		c.warn("cli.check.tls_unverified", src.ID)
+	if (src.TLS.Mode == config.DBTLSPrefer || src.TLS.Mode == config.DBTLSRequire) && src.Engine != "redshift" {
+		c.warn("cli.check.tls_unverified", src.ID) // Redshift has its own warning (warnTransport)
+	}
+}
+
+// warnTransport warns, whether or not the source answers, about the transports some
+// engines use by default and that expose what travels: ClickHouse without a TLS mode speaks
+// plain HTTP, so the password (the X-ClickHouse-Key header) crosses the network in clear
+// text; Redshift's default, prefer, does not verify the certificate and may even fall back
+// to an unencrypted connection. The defaults stay as they are, so existing configurations
+// keep working.
+func (c *checker) warnTransport(src *config.SourceConfig) {
+	switch {
+	case src.Engine == "clickhouse" && src.TLS.Mode == config.DBTLSDisable:
+		c.warn("cli.check.clickhouse_http", src.ID)
+	case src.Engine == "redshift" && (src.TLS.Mode == config.DBTLSPrefer || src.TLS.Mode == config.DBTLSRequire):
+		c.warn("cli.check.redshift_tls", src.ID, src.TLS.Mode)
 	}
 }
 

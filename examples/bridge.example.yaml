@@ -312,8 +312,11 @@ detection:
   # Text goes to it only; only its counts are used. Off unless enabled.
   nlp:
     enabled: false
-    endpoint: "http://127.0.0.1:8333/"  # loopback or private addresses only (checked at every connection)
+    # http:// on this server only (localhost or loopback); another host in your network needs
+    # https://. Every address is checked at each connection.
+    endpoint: "http://127.0.0.1:8333/"
     ca_file: ""                     # for an https endpoint with an internal certificate
+    allow_cgnat: false              # true: an https endpoint may also be in 100.64.0.0/10 (shared address space)
     timeout: 10s                    # per request; after a failure the patterns alone are used for a minute
     min_chars: 200                  # shorter values and files are left to the patterns
     max_bytes: 32KiB                # text of one column or one file per request
