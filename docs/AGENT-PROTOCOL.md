@@ -1032,6 +1032,29 @@ Further database engines, additive and negotiated like revision 3; protocol 1,
    platform should list an engine only once that type exists in both lines.
 5. *Test plan*: an inventory with an engine the platform did not list is refused (400) as
    before; with the feature listed it is accepted; an agent of revision 3 behaves as before.
+6. *Who can read a table* (`table_access`): a platform that stores it lists
+   `table_access` in `platform_features`. Then, and only for sources whose local
+   configuration has `access_inventory`, the agent announces the source capability `access`
+   in `PUT /sources` and adds to each item of a `tables` part that holds personal data
+   (at least one column with `pii` true) the key `access`, after `columns`:
+   ```json
+   "access":{"readers":4,"roles":["r_2ee2302d68ba43e7"],"roles_total":1,"admins":1,"public":false,"complete":true}
+   ```
+   `readers` counts the accounts that can sign in and read the table (directly, through
+   roles, PUBLIC or as administrators); `roles` are the group roles (roles that cannot sign
+   in: never an account that can) with read access and at least one member, sorted, at most
+   20 (*label* characters, 1 to 255 bytes), `roles_total` counts them all; `admins` counts
+   the accounts that read every table; `public` is true when every account can read it;
+   `complete` is false when the agent's database account could not see every grant.
+   Integers only, no other key. By default each role is an opaque id, `r_` and 16
+   lower-case hexadecimal digits (a keyed hash of the role name that only the bridge can
+   compute; the same role keeps its id for one agent), because a role can carry a person's
+   name; with the local setting `access_inventory.role_names: plain` it is the role name
+   itself. The platform shows either as it is and must not expect to resolve an id; the
+   client's operator matches it on the bridge server (`privasimu-bridge access role-id`). A
+   platform that does not list `table_access` never receives `access`. Engines in the agent
+   today: PostgreSQL, MySQL and MariaDB; the platform should show the counts per table and
+   may raise a finding for `public` or many readers.
 
 Mode A has no negotiation: the bridge accepts `db_type` `snowflake` (already in the
 platform's registry) and `redshift`, `clickhouse`, `bigquery`, `databricks` and `athena`

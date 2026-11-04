@@ -117,6 +117,9 @@ func (c *Config) Validate() error {
 			seen(fmt.Sprintf("sources[%d]", i), s.ID)
 		}
 	}
+	if m := c.AccessInventory.RoleNames; m != RoleNamesHashed && m != RoleNamesPlain {
+		p.add("config.role_names", "access_inventory.role_names")
+	}
 	if m := c.Files.ReportPaths; m != PathsHashed && m != PathsRelative {
 		p.add("config.report_paths", "files.report_paths")
 	}
@@ -149,6 +152,9 @@ func (c *Config) validateSource(p *problems, i int) {
 		return
 	}
 	if CloudEngine(s.Engine) {
+		if s.AccessInventory {
+			p.add("config.access_engine", at+".access_inventory")
+		}
 		validateCloudSource(p, at, s)
 		return
 	}
@@ -158,6 +164,9 @@ func (c *Config) validateSource(p *problems, i int) {
 		if set {
 			p.add("config.cloud_field", at+"."+name)
 		}
+	}
+	if s.AccessInventory && s.Engine != "postgresql" && s.Engine != "mysql" {
+		p.add("config.access_engine", at+".access_inventory")
 	}
 	mongoURI := s.Engine == "mongodb" && s.URI.IsSet()
 	if !mongoURI {

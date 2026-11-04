@@ -174,6 +174,7 @@ the platform itself; physical access.
 | `POST {base}/v2/scan-table-columns` | column names and findings of one table | `X-API-Key` |
 | `GET {base}/healthz` | `{"status":"ok"}` | none |
 | `POST {base}/ext/v1/file-roots`, `/ext/v1/file-root-report`, `/ext/v1/file-root-scan` | optional file reports (**proposal**, off by default) | `X-API-Key` |
+| `POST {base}/ext/v1/table-access` | who can read a table of a source with `access_inventory`: counts and group roles, as keyed hashes unless `access_inventory.role_names: plain` (**proposal**, off unless `server.access_endpoint`) | `X-API-Key` |
 
 `{base}` is `server.base_path` (empty by default). The platform keeps a path from
 `bridge_url`, so `https://gw.example/bridge` calls `/bridge/v1/...`.
@@ -327,6 +328,7 @@ and scans nothing for it. An Athena source never announces `sampling` (catalog o
 | counts: sampled values, matching values, per-category counts per file | file content, extracted text |
 | protection state of a column (plaintext, masked, encrypted, mixed) from local sampling | keys, ciphertext, masked strings |
 | file id (keyed hash), extension, size, modification date; the relative path only with `report_paths: relative` | absolute paths, file owners, the HMAC key |
+| with `access_inventory`: how many accounts can read a table with personal data, the group roles that can (a keyed hash per role name, `r_` and 16 hex digits; the names only with `access_inventory.role_names: plain`), whether everyone can | the names of accounts that can sign in (PostgreSQL `rolcanlogin`, MySQL accounts that are not locked, MariaDB users), role names (by default), grants of tables without personal data, the HMAC key |
 | source ids and labels you configure (mode B inventory) | hosts, ports, user names, passwords (mode B); passwords (mode A local credentials) |
 | error kinds and codes | driver messages (they can quote values or internal names) |
 
@@ -336,6 +338,19 @@ tests check that sampled values, file content, paths, hosts and passwords never 
 any response (mode A) or request (mode B). With the optional language model
 (`detection.nlp`, section 10), long text also goes to the client's own model service on the
 bridge server or its internal network; only its counts are kept.
+
+The access inventory names no account that can sign in: such an account is counted as a
+reader, also when it is granted to another account like a role (MySQL allows
+`GRANT 'budi'@'%' TO 'intern1'@'%'`). Only a role that cannot sign in can be a group role
+(PostgreSQL without `LOGIN`, a MariaDB role, a locked MySQL account, which is what
+`CREATE ROLE` makes); when the bridge cannot read whether a MySQL account is locked, it names
+no role and marks the answer incomplete. A group role can still carry a person's name (a
+login turned `NOLOGIN` or locked and granted to a successor), so by default
+(`access_inventory.role_names: hashed`) each role leaves as `r_` and the first 8 bytes, in
+hex, of an HMAC-SHA256 of its name under a key derived from the install's id key
+(`state/file-id.key`, which also names files): stable within one install, not reversible
+without the key. `privasimu-bridge access role-id NAME` prints the id of a role on the
+bridge server. `role_names: plain` sends the names, as the operator's explicit choice.
 
 ## 8. Local credentials
 
@@ -464,6 +479,11 @@ frontend items are in progress (branch `feat/bridge-agent-mode-b-frontend-2026-1
    `platform_features`, inventory validation and the link check (AGENT-PROTOCOL.md section
    13); (opt) the same types in `BridgeSourceTypes` for mode A, served by the bridge from
    configured sources only (Snowflake already is).
+10. (rev 4, proposal) Who can read a table: list `table_access` in `platform_features`,
+    store the `access` object of table items with the table's scan result, show readers,
+    roles (opaque `r_` ids by default, shown as they are), administrators and PUBLIC per
+    table, and optionally raise a finding for a table with personal data that everyone can
+    read; (opt) the same through `/ext/v1/table-access` in mode A.
 
 **Both frontends (frontend and frontend-go, identical code)**
 1. Data Discovery source form: a connection method choice for database types — direct,
@@ -511,7 +531,7 @@ code does, not what a deployment may add around it (a reverse proxy, a firewall)
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | no value is logged on purpose, but driver error texts, which can quote values, are logged and returned (row 4); a `setup_logging()` that would log SQLAlchemy statements and rows at DEBUG to `debug.log` exists but is never called (`app/logging_config.py`) |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | Docker only; the image has no `USER` line, so the service runs as root; no Windows service or systemd unit |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | `uv.lock` pins versions and the image installs with `uv sync --frozen`; `requirements.txt` leaves most packages unpinned; base image pinned by tag, `ghcr.io/astral-sh/uv:latest` unpinned; the obsolete `logging` 0.4.9.6 (2013) is a declared dependency; no vulnerability scan, SBOM or licence notice configured |
-| 22 | Tests (contract, security, minimisation) | 200 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
+| 22 | Tests (contract, security, minimisation) | 214 test functions (7 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | none |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | `GET /health` (status, time, version); `/docs` off unless `DOCS_ENABLED`; no configuration check or command line; English messages only |
 
@@ -526,8 +546,11 @@ the bridge can take it over:
 - **NLP for long text** (`nlp-data-discovery`): only as an optional endpoint inside the
   client's network that the operator configures; text stays on that network and only
   counts leave. Added as `detection.nlp` (section 10).
-- **Grants and access** (`scan-access`): only as counts and role names for the tables that
-  hold personal data, never account names or rows of application user tables.
+- **Grants and access** (`scan-access`): only as counts and group roles (keyed hashes by
+  default) for the tables that hold personal data, never the names of accounts that can
+  sign in or rows of application user tables. Added as
+  `access_inventory` (PostgreSQL, MySQL, MariaDB; agent protocol revision 4 proposal and
+  `/ext/v1/table-access`).
 
 The rest of what it does (rows and values in answers, documents fetched from URLs the
 caller names, credentials in every request) is what the bridge leaves out by design
@@ -572,6 +595,15 @@ caller names, credentials in every request) is what the bridge leaves out by des
   api-data-discovery uses (`{"text"}` in, `entities` with `entity_group`, `score` and
   character `start` out), not against nlp-data-discovery itself; its labels are mapped as
   in api-data-discovery (`app/services/nlp_service.py`), unknown labels are ignored.
+- The access inventory (`access_inventory`) exists for PostgreSQL (complete with any
+  account: `has_table_privilege` over `pg_roles`) and MySQL/MariaDB (complete only with read
+  access to the grant tables, given without the password hash column; otherwise marked
+  incomplete); it ran against PostgreSQL 16.6, MariaDB 11.8.9 and MariaDB 10.4.32. MySQL 8
+  (roles through `mysql.role_edges`, locked accounts through `account_locked`) is covered
+  by unit tests on the rows its grant tables return, not by a real server yet; its
+  `mandatory_roles` and partial revokes are not read. SQL Server, Oracle and the other
+  engines have none yet. With `role_names: plain`, a group role named after a person
+  shows that name.
 - Scanned PDFs and images (OCR), legacy Office formats, encrypted documents and archives
   inside shares are counted, not read.
 - Name heuristics and the NPWP check digit (DJP does not publish the algorithm; Luhn is

@@ -139,3 +139,36 @@ func TestNLPEndpointMustBeLocalOrPrivate(t *testing.T) {
 		t.Errorf("defaults: %+v", n)
 	}
 }
+
+func TestAccessInventoryEngines(t *testing.T) {
+	for engine, ok := range map[string]bool{"postgresql": true, "mysql": true, "mariadb": true, "mssql": false, "oracle": false} {
+		c, err := Parse([]byte("sources:\n  - {id: x, engine: " + engine + ", host: h, database: d, username: u, password: \"secret:p\", access_inventory: true}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("%s: accepted %v, want %v (%v)", engine, err == nil, ok, err)
+		}
+	}
+}
+
+func TestAccessInventoryRoleNames(t *testing.T) {
+	source := "sources:\n  - {id: x, engine: mysql, host: h, database: d, username: u, password: \"secret:p\", access_inventory: true}\n"
+	for block, want := range map[string]string{"": RoleNamesHashed, "access_inventory: {role_names: hashed}\n": RoleNamesHashed,
+		"access_inventory: {role_names: plain}\n": RoleNamesPlain, "access_inventory: {role_names: names}\n": ""} {
+		c, err := Parse([]byte(block + source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.Validate()
+		if want == "" {
+			if err == nil || !strings.Contains(err.Error(), "access_inventory.role_names") {
+				t.Errorf("%q: %v", block, err)
+			}
+			continue
+		}
+		if err != nil || c.AccessInventory.RoleNames != want || !c.UsesAccessInventory() {
+			t.Errorf("%q: %q %v", block, c.AccessInventory.RoleNames, err)
+		}
+	}
+}

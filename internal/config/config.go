@@ -28,6 +28,8 @@ type Config struct {
 	Secrets   SecretsConfig   `yaml:"secrets"`
 	Audit     AuditConfig     `yaml:"audit"`
 	Log       LogConfig       `yaml:"log"`
+	// AccessInventory sets how the sources with access_inventory report group roles.
+	AccessInventory AccessInventoryConfig `yaml:"access_inventory"`
 
 	// path is the absolute path of the loaded file; relative paths resolve against its directory.
 	path string
@@ -35,17 +37,20 @@ type Config struct {
 
 // ServerConfig configures mode A: the HTTPS server the platform calls.
 type ServerConfig struct {
-	Listen         string           `yaml:"listen"`
-	PublicURL      string           `yaml:"public_url"`
-	BasePath       string           `yaml:"base_path"`
-	TLS            ServerTLS        `yaml:"tls"`
-	AllowedClients []string         `yaml:"allowed_clients"`
-	TrustedProxies []string         `yaml:"trusted_proxies"`
-	APIKeys        []APIKey         `yaml:"api_keys"`
-	Credentials    string           `yaml:"credentials"`
-	AllowedTargets []string         `yaml:"allowed_targets"`
-	TargetsCAFile  string           `yaml:"targets_ca_file"`
-	FileEndpoints  bool             `yaml:"file_endpoints"`
+	Listen         string    `yaml:"listen"`
+	PublicURL      string    `yaml:"public_url"`
+	BasePath       string    `yaml:"base_path"`
+	TLS            ServerTLS `yaml:"tls"`
+	AllowedClients []string  `yaml:"allowed_clients"`
+	TrustedProxies []string  `yaml:"trusted_proxies"`
+	APIKeys        []APIKey  `yaml:"api_keys"`
+	Credentials    string    `yaml:"credentials"`
+	AllowedTargets []string  `yaml:"allowed_targets"`
+	TargetsCAFile  string    `yaml:"targets_ca_file"`
+	FileEndpoints  bool      `yaml:"file_endpoints"`
+	// AccessEndpoint serves /ext/v1/table-access (a proposal, off by default): who can read a
+	// table of a source with access_inventory, as counts and role names.
+	AccessEndpoint bool             `yaml:"access_endpoint"`
 	Limits         ServerLimits     `yaml:"limits"`
 	Sampling       *SamplingOptions `yaml:"sampling"`
 }
@@ -139,6 +144,10 @@ type SourceConfig struct {
 	Sampling    *SamplingOptions `yaml:"sampling"`
 	Match       SourceMatch      `yaml:"match"`
 	Timeout     Duration         `yaml:"timeout"`
+	// AccessInventory also reports who can read each table with personal data: counts and
+	// group roles (keyed hashes unless access_inventory.role_names is plain), never the
+	// names of accounts that can sign in (PostgreSQL, MySQL, MariaDB).
+	AccessInventory bool `yaml:"access_inventory"`
 
 	// Cloud warehouses. Warehouse: the Snowflake warehouse (needed for sampling only) or the
 	// Databricks SQL warehouse id (its HTTP path is accepted too). Role: the Snowflake role.
@@ -200,6 +209,32 @@ type SamplingOptions struct {
 	Rows       int     `yaml:"rows"`
 	MinMatches int     `yaml:"min_matches"`
 	Ratio      float64 `yaml:"ratio"`
+}
+
+// AccessInventoryConfig sets how the access inventory (sources[].access_inventory) reports
+// the group roles that can read a table.
+type AccessInventoryConfig struct {
+	// RoleNames is hashed (a keyed hash per role name, the default) or plain (the names).
+	RoleNames string `yaml:"role_names"`
+}
+
+// Role name reporting modes of the access inventory.
+const (
+	// RoleNamesHashed reports each group role as a keyed hash of its name, with the install's
+	// id key (default): a role named after a person does not show that name.
+	RoleNamesHashed = "hashed"
+	// RoleNamesPlain reports the role names as they are (the operator's explicit choice).
+	RoleNamesPlain = "plain"
+)
+
+// UsesAccessInventory reports whether any source has access_inventory.
+func (c *Config) UsesAccessInventory() bool {
+	for i := range c.Sources {
+		if c.Sources[i].AccessInventory {
+			return true
+		}
+	}
+	return false
 }
 
 // FilesConfig configures file-share scanning.
@@ -451,6 +486,9 @@ func (c *Config) applyDefaults() {
 		if src.Timeout <= 0 {
 			src.Timeout = Duration(20e9)
 		}
+	}
+	if c.AccessInventory.RoleNames == "" {
+		c.AccessInventory.RoleNames = RoleNamesHashed
 	}
 	f := &c.Files
 	if f.ReportPaths == "" {

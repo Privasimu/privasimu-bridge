@@ -22,7 +22,10 @@ Trivy, for the security posture per RoPA; only package names, versions, licences
 vulnerability ids leave. Indonesian identifiers are validated locally (NIK, KK, NPWP, BPJS,
 +62/08 phone numbers, payment cards with Luhn, and more). Optionally, long text also goes to
 your own language-model service on the bridge server or your network (names, addresses,
-health and the like in free text); only its counts are used.
+health and the like in free text); only its counts are used. Optionally, the bridge also
+reports who can read each table with personal data (PostgreSQL, MySQL, MariaDB): counts and
+group roles, never the names of accounts that can sign in; role names leave as keyed hashes
+unless you set `access_inventory.role_names: plain`.
 
 ## Works with both Privasimu Nexus lines (Laravel and Go)
 

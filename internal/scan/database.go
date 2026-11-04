@@ -32,6 +32,11 @@ type DBOptions struct {
 	Entities       detect.EntityCounter
 	EntityMinChars int
 	EntityMaxBytes int
+	// Access also reads who can read each table that holds personal data (counts and group
+	// roles only; sources with access_inventory); RoleNames decides what is reported for each
+	// group role (its zero value reports none).
+	Access    bool
+	RoleNames dbsource.RoleNaming
 }
 
 func (o DBOptions) maxTables() int {
@@ -69,6 +74,10 @@ type TableAnalysis struct {
 	// when sampling was on but failed (the columns are then classified by name only).
 	Sampled       bool   `json:"sampled"`
 	SamplingError string `json:"sampling_error,omitempty"`
+	// Access tells who can read a table with personal data (DBOptions.Access); nil when not
+	// read. AccessError holds the error kind when reading it failed.
+	Access      *dbsource.Access `json:"access,omitempty"`
+	AccessError string           `json:"access_error,omitempty"`
 }
 
 // PIIColumns counts the columns classified as personal data.
@@ -173,6 +182,20 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 		res.Columns = append(res.Columns, ColumnAnalysis{
 			Name: col.Name, DataType: col.DataType, Nullable: col.Nullable, Finding: detect.Combine(col.Name, cr),
 		})
+	}
+	if pii, _ := res.PIIColumns(); o.Access && pii > 0 {
+		if ar, ok := c.(dbsource.AccessReader); ok {
+			a, err := ar.TableAccess(ctx, t, o.RoleNames)
+			switch {
+			case errors.Is(err, dbsource.ErrAccessUnsupported):
+			case err != nil && ctx.Err() != nil:
+				return TableAnalysis{}, ctx.Err()
+			case err != nil:
+				res.AccessError = dbsource.KindOf(err)
+			default:
+				res.Access = &a
+			}
+		}
 	}
 	return res, nil
 }

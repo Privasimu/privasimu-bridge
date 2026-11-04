@@ -47,6 +47,7 @@ func commands() []command {
 		{"key", "cli.cmd.key", (*app).cmdKey},
 		{"secret", "cli.cmd.secret", (*app).cmdSecret},
 		{"files", "cli.cmd.files", (*app).cmdFiles},
+		{"access", "cli.cmd.access", (*app).cmdAccess},
 		{"healthcheck", "cli.cmd.healthcheck", (*app).cmdHealthcheck},
 		{"version", "cli.cmd.version", (*app).cmdVersion},
 	}

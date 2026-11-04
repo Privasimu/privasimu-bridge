@@ -530,6 +530,9 @@ func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceCon
 		MaxTables:  lower(defaultMaxTables, o.MaxTables),
 		MaxColumns: lower(defaultMaxColumns, o.MaxColumns),
 	}
+	if src.AccessInventory && a.platformHas(FeatureTableAccess) {
+		opts.Access, opts.RoleNames = true, a.roleNames
+	}
 	if a.entities != nil {
 		opts.Entities, opts.EntityMinChars, opts.EntityMaxBytes = a.entities, a.cfg.Detection.NLP.MinChars, int(a.cfg.Detection.NLP.MaxBytes)
 	}
@@ -580,6 +583,14 @@ func lower(def, requested int) int {
 func tableItem(t scan.TableAnalysis) TableItem {
 	item := TableItem{Name: t.Name, Schema: t.Schema, RowEstimate: t.RowEstimate, OmittedColumns: t.Omitted,
 		Sampled: t.Sampled, SamplingError: t.SamplingError, Columns: make([]ColumnItem, 0, len(t.Columns))}
+	if a := t.Access; a != nil {
+		roles := a.Roles
+		if roles == nil {
+			roles = []string{}
+		}
+		item.Access = &TableAccess{Readers: a.Readers, Roles: roles, RolesTotal: a.RolesTotal, Admins: a.Admins, Public: a.Public,
+			Complete: a.Complete}
+	}
 	for _, c := range t.Columns {
 		f := c.Finding
 		ci := ColumnItem{Name: c.Name, DataType: c.DataType, Nullable: c.Nullable, PII: f.IsPII, Category: string(f.Category),
