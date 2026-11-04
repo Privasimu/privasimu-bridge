@@ -113,7 +113,7 @@ go test ./...                    # unit, contract, security and fake-platform te
 go vet ./... && GOOS=linux go vet ./...
 govulncheck ./...
 make dist VERSION=0.1.0          # static builds for linux/amd64, linux/arm64, windows/amd64
-go test -tags integration ./internal/dbsource/   # needs BRIDGE_IT_* database variables
+make integration                 # needs the BRIDGE_IT_* variables of internal/testutil/itenv
 ```
 
 The command line speaks English and Indonesian (`--lang id` or
@@ -125,5 +125,7 @@ The command line speaks English and Indonesian (`--lang id` or
 scanning are implemented in both platform lines (agent protocol revision 2; see
 [docs/DESIGN.md](docs/DESIGN.md) section 12 for the frontend work). Package scans
 (`scan_packages`, agent protocol revision 3) are implemented in the agent and tested with
-fake scanners; the platform side is in progress in both lines. Database integration
-tests have not been run against live databases yet.
+fake scanners; the platform side is in progress in both lines. The database integration
+tests ran against PostgreSQL 16.6 and MariaDB 11.8.9 (catalog, sampling, read-only and
+time-limited sessions, error kinds, both modes end to end); MySQL 8, SQL Server, Oracle and
+MongoDB have not been run against live servers yet.

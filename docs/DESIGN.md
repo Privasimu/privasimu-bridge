@@ -150,7 +150,7 @@ bridge ↔ file shares; bridge ↔ local operator.
 | API key brute force | 256-bit keys, SHA-256 at rest, constant-time comparison over all keys, lockout after 10 failures, token bucket per address, `allowed_clients` before the TLS handshake | — |
 | Leaked API key or agent token | Key ids, expiry and revocation (`key revoke`); agent revocation and rotation with a 10-minute overlap | Until revoked, a leaked key can list names of configured sources |
 | Account lockout of the database through retries | Credential and permission failures answer 422, which the platform never retries; failed logins are remembered for a minute | — |
-| Load on production databases | Read-only sessions, statement and lock timeouts, at most 4 connections per source, sampling bounded by rows, `READ UNCOMMITTED` and `ApplicationIntent=ReadOnly` on SQL Server, secondaries on MongoDB | Catalog queries on very large catalogs still cost the server some work |
+| Load on production databases | Read-only sessions (`default_transaction_read_only` on PostgreSQL, `SET SESSION TRANSACTION READ ONLY` on MySQL and MariaDB), statement timeouts enforced by the server (`statement_timeout`, `max_execution_time`, `max_statement_time`) and lock timeouts, at most 4 connections per source, sampling bounded by rows, `READ UNCOMMITTED` and `ApplicationIntent=ReadOnly` on SQL Server, secondaries on MongoDB | Catalog queries on very large catalogs still cost the server some work |
 | SQL injection through table names | Names come from the catalog (the platform's name is looked up with bind parameters), identifiers quoted per engine, row limit bound | — |
 | A hostile database server | MySQL `LOAD DATA LOCAL INFILE` refused, no clear-text passwords, response sizes bounded by the drivers | Driver bugs |
 | Malicious files on a share (links out of the root, junctions, zip bombs, hostile PDFs, FIFOs) | Roots from local configuration only; `os.Root`; links, junctions and special files skipped; non-blocking open and a regular-file re-check; zip sizes checked unsigned and bounded; PDF parsed in a child process with an empty environment and a hard timeout | A parser bug inside the child |
@@ -477,7 +477,7 @@ code does, not what a deployment may add around it (a reverse proxy, a firewall)
 | 19 | Logging of values or passwords | none (typed audit, redacted secrets) | no value is logged on purpose, but driver error texts, which can quote values, are logged and returned (row 4); a `setup_logging()` that would log SQLAlchemy statements and rows at DEBUG to `debug.log` exists but is never called (`app/logging_config.py`) |
 | 20 | Service packaging (Windows service, systemd, Docker, non-root) | all three, hardened | Docker only; the image has no `USER` line, so the service runs as root; no Windows service or systemd unit |
 | 21 | Dependency hygiene (pinned, vulnerability scan, SBOM) | go.sum, govulncheck and gosec clean, digest-pinned images, notices | `uv.lock` pins versions and the image installs with `uv sync --frozen`; `requirements.txt` leaves most packages unpinned; base image pinned by tag, `ghcr.io/astral-sh/uv:latest` unpinned; the obsolete `logging` 0.4.9.6 (2013) is a declared dependency; no vulnerability scan, SBOM or licence notice configured |
-| 22 | Tests (contract, security, minimisation) | 155 test functions (2 of them integration tests behind a build tag), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
+| 22 | Tests (contract, security, minimisation) | 163 test functions (6 of them integration tests behind a build tag, run against PostgreSQL and MariaDB), many table-driven, incl. both platform clients and a fake platform with both lines' field rules | 77 test functions with FastAPI `TestClient`; the contract tests run the real scanner against a temporary SQLite file and check that neither bridge endpoint returns a stored value; API key and docs exposure tests; no test against a database server |
 | 23 | Outbound-only mode | mode B (agent and both platform lines) | none |
 | 24 | Operator tooling (config check, bilingual messages, health check) | `check`, `--lang id`, `healthcheck` | `GET /health` (status, time, version); `/docs` off unless `DOCS_ENABLED`; no configuration check or command line; English messages only |
 
@@ -502,10 +502,17 @@ caller names, credentials in every request) is what the bridge leaves out by des
 - Mode B and file scanning are implemented in both backends (section 12) and verified end
   to end against the Laravel line; the frontends are in progress. Two lost token-rotation
   answers in a row still lock an agent out (AGENT-PROTOCOL.md section 13).
-- No database integration test was run in this environment (no database server was
-  available); they exist behind the `integration` build tag with fixtures for all five
-  engines. Linux-only paths (symbolic links, systemd install) were compiled and vetted on
-  Windows, not executed.
+- The database integration tests (build tag `integration`, variables in
+  `internal/testutil/itenv`, fixtures for all five engines) ran on 4 November 2026 against
+  PostgreSQL 16.6 and MariaDB 11.8.9 on loopback, with `verify-full` TLS: catalog and
+  sampling; the session settings (read-only, a write refused even for a superuser or root
+  account, a 5-second statement stopped by the server after its 2-second limit); the error
+  kinds of a wrong password, an unknown database, a closed port, a certificate for another
+  name and an untrusted CA; and mode A (both platform clients) and mode B (the in-memory
+  platform) end to end with no fixture value in any answer or upload. MySQL 8, SQL Server,
+  Oracle and MongoDB were not run (no server here); the same tests run against them when
+  their variables are set. Linux-only paths (symbolic links, systemd install) were compiled
+  and vetted on Windows, not executed.
 - Package scans were tested with fake scanners only (the test binary standing in for Syft,
   Grype and Trivy with recorded outputs); the real tools run in the opt-in
   `integration` test. The Linux priority and exclusion paths were vetted, not executed, on

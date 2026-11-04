@@ -54,10 +54,11 @@ vet:
 vuln:
 	govulncheck ./...
 
-# Needs the BRIDGE_IT_* variables; see internal/dbsource/integration_test.go and
-# internal/packages/integration_test.go (real Syft/Grype installed by you).
+# Needs the BRIDGE_IT_* variables of internal/testutil/itenv (databases loaded with
+# internal/dbsource/testdata/integration) and, for internal/packages, real Syft and Grype
+# installed by you. Engines and tools without variables are skipped.
 integration:
-	go test -tags integration ./internal/dbsource/ ./internal/packages/
+	go test -p 1 -tags integration ./internal/dbsource/ ./internal/server/ ./internal/agent/ ./internal/packages/
 
 clean:
 	rm -rf bin dist
