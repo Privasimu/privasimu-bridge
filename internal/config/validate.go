@@ -26,7 +26,19 @@ var (
 )
 
 // Engines lists the database engines the bridge can scan.
-var Engines = []string{"postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse"}
+var Engines = []string{"postgresql", "mysql", "mssql", "oracle", "mongodb", "redshift", "clickhouse",
+	"snowflake", "bigquery", "databricks", "athena"}
+
+var (
+	// projectPattern is a Google Cloud project id.
+	projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	// warehousePattern is a Databricks SQL warehouse id, alone or in its HTTP path.
+	warehousePattern = regexp.MustCompile(`^(/sql/1\.0/(warehouses|endpoints)/)?[A-Za-z0-9]{1,64}$`)
+	// regionPattern is an AWS region.
+	regionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]{1,2}$`)
+	// accessKeyPattern is an AWS access key id.
+	accessKeyPattern = regexp.MustCompile(`^[A-Z0-9]{16,128}$`)
+)
 
 // ProtocolEngines are the engines every platform of agent protocol revision 2 or 3 accepts
 // in an inventory. The others are sent only to a platform whose poll answer lists
@@ -135,6 +147,17 @@ func (c *Config) validateSource(p *problems, i int) {
 		p.add("config.engine", at+".engine", strings.Join(Engines, ", "))
 		return
 	}
+	if CloudEngine(s.Engine) {
+		validateCloudSource(p, at, s)
+		return
+	}
+	for name, set := range map[string]bool{"warehouse": s.Warehouse != "", "role": s.Role != "", "private_key": s.PrivateKey.IsSet(),
+		"private_key_passphrase": s.PrivateKeyPassphrase.IsSet(), "credentials": s.Credentials.IsSet(), "region": s.Region != "",
+		"session_token": s.SessionToken.IsSet()} {
+		if set {
+			p.add("config.cloud_field", at+"."+name)
+		}
+	}
 	mongoURI := s.Engine == "mongodb" && s.URI.IsSet()
 	if !mongoURI {
 		if !hostPattern.MatchString(s.Host) {
@@ -183,6 +206,100 @@ func (c *Config) validateSource(p *problems, i int) {
 	case DBTLSDisable, DBTLSPrefer, DBTLSRequire, DBTLSVerifyCA, DBTLSVerifyFull:
 	default:
 		p.add("config.db_tls", at+".tls.mode")
+	}
+	if s.Sampling != nil {
+		validateSampling(p, at+".sampling", s.Sampling)
+	}
+}
+
+// validateCloudSource checks a Snowflake, BigQuery, Databricks or Athena source: verified
+// TLS only, the engine's own required settings, and every secret as a reference.
+func validateCloudSource(p *problems, at string, s *SourceConfig) {
+	if s.TLS.Mode != DBTLSVerifyFull {
+		p.add("config.cloud_tls", at+".tls.mode")
+	}
+	for name, ref := range map[string]SecretRef{"password": s.Password, "private_key": s.PrivateKey,
+		"private_key_passphrase": s.PrivateKeyPassphrase, "credentials": s.Credentials, "session_token": s.SessionToken} {
+		checkRef(p, at+"."+name, ref)
+	}
+	if s.URI.IsSet() {
+		p.add("config.uri_mongo_only", at+".uri")
+	}
+	if s.Port < 1 || s.Port > 65535 {
+		p.add("config.port", at+".port")
+	}
+	for j, sc := range s.Schemas {
+		if !identifierPattern.MatchString(sc) {
+			p.add("config.identifier", fmt.Sprintf("%s.schemas[%d]", at, j))
+		}
+	}
+	if s.Username != "" && (hasControl(s.Username) || len(s.Username) > 128) {
+		p.add("config.identifier", at+".username")
+	}
+	if s.Role != "" && !identifierPattern.MatchString(s.Role) {
+		p.add("config.identifier", at+".role")
+	}
+	switch s.Engine {
+	case "snowflake":
+		if !hostPattern.MatchString(s.Host) {
+			p.add("config.host", at+".host")
+		}
+		if !identifierPattern.MatchString(s.Database) {
+			p.add("config.database", at+".database")
+		}
+		if s.Username == "" {
+			p.add("config.required", at+".username")
+		}
+		if s.Password.IsSet() == s.PrivateKey.IsSet() {
+			p.add("config.snowflake_auth", at)
+		}
+		if s.Warehouse != "" && !identifierPattern.MatchString(s.Warehouse) {
+			p.add("config.identifier", at+".warehouse")
+		}
+	case "bigquery":
+		if !projectPattern.MatchString(s.Database) {
+			p.add("config.project", at+".database")
+		}
+		if !s.Credentials.IsSet() {
+			p.add("config.required", at+".credentials")
+		}
+	case "databricks":
+		if !hostPattern.MatchString(s.Host) {
+			p.add("config.host", at+".host")
+		}
+		if !identifierPattern.MatchString(s.Database) {
+			p.add("config.database", at+".database")
+		}
+		if !warehousePattern.MatchString(s.Warehouse) {
+			p.add("config.warehouse", at+".warehouse")
+		}
+		if !s.Password.IsSet() {
+			p.add("config.required", at+".password")
+		}
+	case "athena":
+		if !regionPattern.MatchString(s.Region) {
+			p.add("config.region", at+".region")
+		}
+		if !accessKeyPattern.MatchString(s.Username) {
+			p.add("config.access_key", at+".username")
+		}
+		if !s.Password.IsSet() {
+			p.add("config.required", at+".password")
+		}
+		if s.Database != "" && !identifierPattern.MatchString(s.Database) {
+			p.add("config.identifier", at+".database")
+		}
+		if s.Sampling != nil && s.Sampling.On() {
+			p.add("config.sampling_unsupported", at)
+		}
+	}
+	if s.Engine != "snowflake" {
+		for name, set := range map[string]bool{"role": s.Role != "", "private_key": s.PrivateKey.IsSet(),
+			"private_key_passphrase": s.PrivateKeyPassphrase.IsSet()} {
+			if set {
+				p.add("config.snowflake_field", at+"."+name)
+			}
+		}
 	}
 	if s.Sampling != nil {
 		validateSampling(p, at+".sampling", s.Sampling)

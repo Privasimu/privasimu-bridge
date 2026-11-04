@@ -60,7 +60,8 @@ func Key(t Target) string {
 	for _, part := range []string{t.Engine, strings.ToLower(t.Host), strconv.Itoa(t.Port), t.Database, t.Username,
 		t.Password.Reveal(), t.URI.Reveal(), t.AuthSource, strings.Join(t.Schemas, ","), t.ServiceName, t.SID,
 		t.Instance, t.TLS.Mode, t.TLS.CAFile, t.TLS.ServerName, strconv.FormatBool(t.TLS.TrustServerCertificate),
-		strconv.FormatBool(t.Dial != nil)} {
+		strconv.FormatBool(t.Dial != nil), t.Warehouse, t.Role, t.PrivateKey.Reveal(), t.PrivateKeyPassphrase.Reveal(),
+		t.Credentials.Reveal(), t.Region, t.SessionToken.Reveal()} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

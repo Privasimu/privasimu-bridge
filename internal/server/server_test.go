@@ -331,7 +331,7 @@ func TestErrorKindsAsThePlatformSeesThem(t *testing.T) {
 	})
 	t.Run("unsupported type is rejected", func(t *testing.T) {
 		h := newHarness(t, nil)
-		if res := h.pc.Test(context.Background(), h.ts.URL, h.key, "snowflake", h.source()); res.Kind != pcKindRejected {
+		if res := h.pc.Test(context.Background(), h.ts.URL, h.key, "db2", h.source()); res.Kind != pcKindRejected {
 			t.Fatalf("%+v", res)
 		}
 	})

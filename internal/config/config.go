@@ -139,7 +139,33 @@ type SourceConfig struct {
 	Sampling    *SamplingOptions `yaml:"sampling"`
 	Match       SourceMatch      `yaml:"match"`
 	Timeout     Duration         `yaml:"timeout"`
+
+	// Cloud warehouses. Warehouse: the Snowflake warehouse (needed for sampling only) or the
+	// Databricks SQL warehouse id (its HTTP path is accepted too). Role: the Snowflake role.
+	// PrivateKey (+ PrivateKeyPassphrase): the Snowflake key pair, PEM. Credentials: the
+	// BigQuery service account key, JSON. Region and SessionToken: Athena.
+	Warehouse            string    `yaml:"warehouse"`
+	Role                 string    `yaml:"role"`
+	PrivateKey           SecretRef `yaml:"private_key"`
+	PrivateKeyPassphrase SecretRef `yaml:"private_key_passphrase"`
+	Credentials          SecretRef `yaml:"credentials"`
+	Region               string    `yaml:"region"`
+	SessionToken         SecretRef `yaml:"session_token"`
 }
+
+// CloudEngine reports whether an engine is a cloud service reached over HTTPS with
+// verified TLS only (Snowflake, BigQuery, Databricks, Athena).
+func CloudEngine(engine string) bool {
+	switch engine {
+	case "snowflake", "bigquery", "databricks", "athena":
+		return true
+	}
+	return false
+}
+
+// EngineSamples reports whether the bridge can sample values of an engine. Athena runs
+// every query into an S3 bucket, so the bridge reads its catalog only.
+func EngineSamples(engine string) bool { return engine != "athena" }
 
 // SourceTLS configures the TLS connection to a database.
 type SourceTLS struct {
@@ -485,6 +511,8 @@ func DefaultPort(engine string) int {
 		return 5439
 	case "clickhouse":
 		return 8123
+	case "snowflake", "bigquery", "databricks", "athena":
+		return 443
 	}
 	return 0
 }
@@ -499,8 +527,10 @@ const ClickHouseTLSPort = 8443
 // HTTPS) or a URI option (MongoDB). verify-full is recommended wherever the database has a
 // certificate.
 func defaultDBTLS(engine string) string {
-	switch engine {
-	case "postgresql", "mysql", "mssql", "redshift":
+	switch {
+	case CloudEngine(engine):
+		return DBTLSVerifyFull
+	case engine == "postgresql" || engine == "mysql" || engine == "mssql" || engine == "redshift":
 		return DBTLSPrefer
 	}
 	return DBTLSDisable
@@ -524,6 +554,10 @@ func (c *Config) SamplingFor(src *SourceConfig) SamplingOptions {
 		if o.Ratio > 0 {
 			out.Ratio = o.Ratio
 		}
+	}
+	if src != nil && !EngineSamples(src.Engine) {
+		off := false
+		out.Enabled = &off
 	}
 	return out
 }

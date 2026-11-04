@@ -155,7 +155,7 @@ func pcRelational(extra ...pcField) []pcField {
 }
 
 // pcRegistry is the platform's bridge source type registry (postgresql, mysql, mssql,
-// oracle; snowflake, db2 and db2i are not served by this bridge).
+// oracle and snowflake (local sources only); db2 and db2i are not served by this bridge).
 var pcRegistry = map[string][]pcField{
 	"postgresql": pcRelational(),
 	"mysql":      pcRelational(),

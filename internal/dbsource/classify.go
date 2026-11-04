@@ -15,6 +15,10 @@ func classifyDriver(err error) string {
 	if k := classifyClickHouse(err); k != "" {
 		return k
 	}
+	var ce *cloudError
+	if errors.As(err, &ce) && ce.Kind != "" {
+		return ce.Kind
+	}
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		switch {

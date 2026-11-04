@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -40,5 +41,24 @@ func TestFurtherEnginesNeedALocalSource(t *testing.T) {
 	}
 	if len(r.db.Opened) != 0 {
 		t.Fatal("nothing may be opened with request credentials for these engines")
+	}
+}
+
+// Snowflake is in the platform's registry: a configured Snowflake source answers the
+// platform's calls with its own key pair, never with the password typed in Privasimu.
+func TestSnowflakeFromAConfiguredSource(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.Sources = append(c.Sources, config.SourceConfig{ID: "dwh", Label: "DWH", Engine: "snowflake", Host: "myorg-myaccount",
+			Port: 443, Database: "corebank", Username: "privasimu_ro", PrivateKey: "secret:corebank_pg", Warehouse: "scan_wh",
+			TLS: config.SourceTLS{Mode: config.DBTLSVerifyFull}, Timeout: config.Duration(20 * time.Second),
+			Match: config.SourceMatch{Host: "corebank"}})
+	})
+	h.db.Engine = "snowflake"
+	if res := h.pc.Test(context.Background(), h.ts.URL, h.key, "snowflake", h.source()); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	got := h.db.LastTarget()
+	if got.Engine != "snowflake" || got.PrivateKey.Reveal() != localPassword || got.Password.Reveal() != "" || got.Warehouse != "scan_wh" {
+		t.Fatalf("the configured source's own credentials must be used: %s %s", got.Engine, got.Warehouse)
 	}
 }

@@ -35,8 +35,8 @@ func TestReferenceExampleIsValid(t *testing.T) {
 	if err := c.ValidateAgent(); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Sources) != 7 || c.Sources[1].Engine != "mysql" || c.Sources[0].Match.Host != "corebank" ||
-		c.Sources[5].Port != 5439 || c.Sources[6].Port != ClickHouseTLSPort {
+	if len(c.Sources) != 11 || c.Sources[1].Engine != "mysql" || c.Sources[0].Match.Host != "corebank" ||
+		c.Sources[5].Port != 5439 || c.Sources[6].Port != ClickHouseTLSPort || c.Sources[7].TLS.Mode != DBTLSVerifyFull {
 		t.Fatalf("%+v", c.Sources)
 	}
 	if len(c.Packages.Targets) != 3 || c.Packages.Tools.Matcher != MatcherGrype || c.Packages.Targets[2].Kind != PackageImageArchive {

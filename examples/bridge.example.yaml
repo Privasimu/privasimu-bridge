@@ -96,7 +96,8 @@ sources:
   - id: core-banking                # lower case, digits, - _ . (used in mode B and logs)
     label: "Core banking (DC Jakarta)"  # shown in Privasimu, 1-128 characters; default: the id
     description: ""                 # optional, at most 512 characters
-    engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse
+    engine: postgresql              # postgresql | mysql | mariadb | mssql | oracle | mongodb | redshift | clickhouse |
+                                    # snowflake | bigquery | databricks | athena
     host: 10.10.1.20
     port: 5432                      # default per engine
     database: corebank
@@ -176,6 +177,44 @@ sources:
     username: privasimu_ro
     password: "secret:events_clickhouse"
     tls: {mode: verify-full, ca_file: tls/db-ca.pem}
+
+  # Cloud warehouses: HTTPS with verify-full only (the default), through HTTPS_PROXY when
+  # the service has one set; the install guide (section 6.1) lists the grants.
+  - id: dwh-snowflake
+    label: "DWH (Snowflake)"
+    engine: snowflake
+    host: myorg-myaccount           # account identifier or the full *.snowflakecomputing.com name
+    database: corebank
+    username: privasimu_ro
+    private_key: "secret:sf_key"    # key pair (PEM); or password: a programmatic access token
+    private_key_passphrase: ""      # for an encrypted PKCS#8 key
+    role: privasimu_reader
+    warehouse: scan_wh              # needed for sampling only
+
+  - id: analytics-bigquery
+    label: "Analytics (BigQuery)"
+    engine: bigquery
+    database: my-gcp-project        # the project id
+    schemas: [crm, sales]           # datasets; empty = every dataset
+    credentials: "secret:bq_key"    # service account key (JSON); the token is read-only
+
+  - id: lakehouse-databricks
+    label: "Lakehouse (Databricks)"
+    engine: databricks
+    host: adb-1234567890123456.7.azuredatabricks.net
+    database: main                  # the Unity Catalog catalog
+    warehouse: /sql/1.0/warehouses/abc123def456
+    username: ""                    # a service principal's application id (OAuth), or empty
+    password: "secret:dbx_token"    # its OAuth secret, or a personal access token
+
+  - id: datalake-athena
+    label: "Data lake (Athena)"
+    engine: athena                  # catalog only: Athena is never sampled
+    region: ap-southeast-3
+    database: AwsDataCatalog
+    schemas: [crm]
+    username: AKIAEXAMPLEPLACEHOLD  # access key id
+    password: "secret:aws_secret"   # secret access key
 
 # ---------------------------------------------------------------------------------------
 # File shares this bridge may scan. Only these directories are ever read; the platform
