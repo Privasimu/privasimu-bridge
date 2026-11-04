@@ -290,6 +290,18 @@ detection:
     rows: 100
     min_matches: 3
     ratio: 0.2
+  # Optional language model for long text (names, addresses, health, ... in free text):
+  # your own service on this server or the internal network, for example nlp-data-discovery.
+  # Text goes to it only; only its counts are used. Off unless enabled.
+  nlp:
+    enabled: false
+    endpoint: "http://127.0.0.1:8333/"  # loopback or private addresses only (checked at every connection)
+    ca_file: ""                     # for an https endpoint with an internal certificate
+    timeout: 10s                    # per request; after a failure the patterns alone are used for a minute
+    min_chars: 200                  # shorter values and files are left to the patterns
+    max_bytes: 32KiB                # text of one column or one file per request
+    min_score: 0.8                  # least confidence of an entity
+    concurrency: 2
 
 secrets:
   file: secrets.enc                 # AES-256-GCM encrypted store

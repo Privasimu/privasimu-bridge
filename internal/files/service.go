@@ -11,6 +11,7 @@ import (
 
 	"github.com/privasimu/bridge/internal/audit"
 	"github.com/privasimu/bridge/internal/config"
+	"github.com/privasimu/bridge/internal/detect"
 )
 
 // Service owns the configured roots, runs at most one scan per root at a time, keeps the
@@ -117,6 +118,13 @@ func (s *Service) Describe() []RootInfo {
 			PathMode: r.cfg.ReportPaths})
 	}
 	return out
+}
+
+// UseEntityCounter makes file scans also count what a local language-model service finds
+// in the first maxBytes of a file's text, for files with at least minChars characters
+// (detection.nlp). Call it before scanning starts.
+func (s *Service) UseEntityCounter(ec detect.EntityCounter, minChars, maxBytes int) {
+	s.scanner.opts.Entities, s.scanner.opts.EntityMinChars, s.scanner.opts.EntityMaxBytes = ec, minChars, maxBytes
 }
 
 // Root returns a usable root.

@@ -12,8 +12,10 @@ import (
 	"github.com/privasimu/bridge/internal/agent"
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
+	"github.com/privasimu/bridge/internal/detect"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/i18n"
+	"github.com/privasimu/bridge/internal/nlp"
 	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
 	"github.com/privasimu/bridge/internal/server"
@@ -56,14 +58,19 @@ func (a *app) cmdServe(args []string) error {
 			return err
 		}
 		defer auditLog.Close()
+		entities, err := entityCounter(cfg, log)
+		if err != nil {
+			return err
+		}
 		var fsvc *files.Service
 		if cfg.Server.FileEndpoints {
 			if fsvc, err = files.NewService(cfg, log, auditLog); err != nil {
 				return err
 			}
+			useEntities(fsvc, cfg, entities)
 		}
 		srv, err := server.New(server.Deps{Config: cfg, Resolver: secrets.NewResolver(cfg),
-			Pool: dbsource.NewPool(32, 5*time.Minute), Audit: auditLog, Log: log, Files: fsvc})
+			Pool: dbsource.NewPool(32, 5*time.Minute), Audit: auditLog, Log: log, Files: fsvc, Entities: entities})
 		if err != nil {
 			return err
 		}
@@ -103,17 +110,22 @@ func (a *app) cmdAgent(args []string) error {
 		if err != nil {
 			return err
 		}
+		entities, err := entityCounter(cfg, log)
+		if err != nil {
+			return err
+		}
 		fsvc, err := files.NewService(cfg, log, auditLog)
 		if err != nil {
 			return err
 		}
+		useEntities(fsvc, cfg, entities)
 		psvc, err := packages.NewService(cfg, log, auditLog)
 		if err != nil {
 			return err
 		}
 		warnPackageTools(cfg, log)
 		ag, err := agent.New(agent.Deps{Config: cfg, Client: client, Resolver: secrets.NewResolver(cfg), Files: fsvc,
-			Packages: psvc, Audit: auditLog, Log: log})
+			Packages: psvc, Entities: entities, Audit: auditLog, Log: log})
 		if err != nil {
 			if errors.Is(err, agent.ErrNotEnrolled) {
 				return errors.New(i18n.T("cli.agent.not_enrolled"))
@@ -188,5 +200,23 @@ func warnPackageTools(cfg *config.Config, log *slog.Logger) {
 			log.Error("package scanner is not usable; scan_packages jobs will fail until it is fixed (see: privasimu-bridge check)",
 				"tool", name, "problem", packages.ToolProblem(err))
 		}
+	}
+}
+
+// entityCounter returns the optional local NLP service (detection.nlp), or nil when it is
+// off; a nil *nlp.Client never becomes a non-nil interface.
+func entityCounter(cfg *config.Config, log *slog.Logger) (detect.EntityCounter, error) {
+	c, err := nlp.New(cfg, log)
+	if err != nil || c == nil {
+		return nil, err
+	}
+	log.Info("NLP service on for long text; only its counts are used", "endpoint", cfg.Detection.NLP.Endpoint)
+	return c, nil
+}
+
+// useEntities gives the file scans the NLP service, when there is one.
+func useEntities(fsvc *files.Service, cfg *config.Config, ec detect.EntityCounter) {
+	if fsvc != nil && ec != nil {
+		fsvc.UseEntityCounter(ec, cfg.Detection.NLP.MinChars, int(cfg.Detection.NLP.MaxBytes))
 	}
 }

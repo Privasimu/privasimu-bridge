@@ -21,6 +21,7 @@ import (
 	"github.com/privasimu/bridge/internal/buildinfo"
 	"github.com/privasimu/bridge/internal/config"
 	"github.com/privasimu/bridge/internal/dbsource"
+	"github.com/privasimu/bridge/internal/detect"
 	"github.com/privasimu/bridge/internal/files"
 	"github.com/privasimu/bridge/internal/packages"
 	"github.com/privasimu/bridge/internal/secrets"
@@ -34,6 +35,8 @@ type Deps struct {
 	Files    *files.Service
 	// Packages runs package scans (job scan_packages); nil when no target is configured.
 	Packages *packages.Service
+	// Entities is the optional local NLP service (detection.nlp); nil = patterns only.
+	Entities detect.EntityCounter
 	Audit    *audit.Logger
 	Log      *slog.Logger
 	// Open connects to a database; tests replace it.
@@ -47,6 +50,7 @@ type Agent struct {
 	resolver *secrets.Resolver
 	files    *files.Service
 	packages *packages.Service
+	entities detect.EntityCounter
 	audit    *audit.Logger
 	log      *slog.Logger
 	open     func(ctx context.Context, t dbsource.Target) (dbsource.Conn, error)
@@ -131,7 +135,7 @@ var ErrNotEnrolled = errors.New("the agent is not enrolled")
 
 // New builds an enrolled agent.
 func New(d Deps) (*Agent, error) {
-	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, packages: d.Packages, audit: d.Audit, log: d.Log,
+	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, packages: d.Packages, entities: d.Entities, audit: d.Audit, log: d.Log,
 		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
 		withheld: map[string]bool{}, sleep: sleepCtx, minRenew: 5 * time.Second}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }

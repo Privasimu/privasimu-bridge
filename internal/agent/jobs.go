@@ -530,6 +530,9 @@ func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceCon
 		MaxTables:  lower(defaultMaxTables, o.MaxTables),
 		MaxColumns: lower(defaultMaxColumns, o.MaxColumns),
 	}
+	if a.entities != nil {
+		opts.Entities, opts.EntityMinChars, opts.EntityMaxBytes = a.entities, a.cfg.Detection.NLP.MinChars, int(a.cfg.Detection.NLP.MaxBytes)
+	}
 	t, err := a.target(src)
 	if err != nil {
 		return nil, nil, "", err

@@ -107,3 +107,35 @@ sources:
 		}
 	}
 }
+
+func TestNLPEndpointMustBeLocalOrPrivate(t *testing.T) {
+	for endpoint, ok := range map[string]bool{
+		"http://127.0.0.1:8333/":                true,
+		"http://localhost:8333/":                true, // a name is checked when connecting
+		"https://nlp.internal.example.co.id/v1": true,
+		"http://10.20.0.5:8333/":                true,
+		"http://[::1]:8333/":                    true,
+		"http://203.0.113.10:8333/":             false,
+		"http://169.254.169.254/":               false,
+		"ftp://127.0.0.1/":                      false,
+		"http://user:pass@127.0.0.1/":           false,
+		"http://127.0.0.1/?token=x":             false,
+		"":                                      false,
+	} {
+		c, err := Parse([]byte("detection:\n  nlp: {enabled: true, endpoint: \"" + endpoint + "\"}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("%q: accepted %v, want %v (%v)", endpoint, err == nil, ok, err)
+		}
+	}
+	c, _ := Parse([]byte("detection:\n  nlp: {enabled: true, endpoint: \"http://127.0.0.1:8333/\", timeout: 5m}\n"))
+	if err := c.Validate(); err == nil {
+		t.Error("a timeout of 5 minutes must be refused")
+	}
+	c, _ = Parse([]byte("{}"))
+	if n := c.Detection.NLP; n.Enabled || n.MinChars != 200 || n.MaxBytes != 32<<10 || n.MinScore != 0.8 || n.Concurrency != 2 {
+		t.Errorf("defaults: %+v", n)
+	}
+}

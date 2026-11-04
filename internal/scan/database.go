@@ -26,6 +26,12 @@ type DBOptions struct {
 	MaxColumns int
 	// Concurrency bounds tables analyzed at once by Database (default 4).
 	Concurrency int
+	// Entities, when set, also examines long sampled text values (at least
+	// EntityMinChars characters, at most EntityMaxBytes per column) with a local
+	// language-model service; only its counts are kept (detection.nlp).
+	Entities       detect.EntityCounter
+	EntityMinChars int
+	EntityMaxBytes int
 }
 
 func (o DBOptions) maxTables() int {
@@ -126,6 +132,9 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 		for i, col := range kept {
 			if col.Sampleable {
 				samplers[i] = detect.NewColumnSampler(col.Name)
+				if o.Entities != nil && o.EntityMinChars > 0 && o.EntityMaxBytes > 0 {
+					samplers[i].KeepLongText(o.EntityMinChars, o.EntityMaxBytes)
+				}
 			}
 		}
 		err := c.Sample(ctx, t, kept, o.Rows, func(i int, value string, null bool) {
@@ -140,12 +149,18 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 			res.SamplingError = dbsource.KindOf(err)
 		} else {
 			res.Sampled = true
+			addEntities(ctx, o.Entities, samplers)
 			content = make([]*detect.ContentResult, len(kept))
 			for i, s := range samplers {
 				if s != nil {
 					r := s.Result(o.Thresholds)
 					content[i] = &r
 				}
+			}
+		}
+		for _, s := range samplers {
+			if s != nil {
+				s.DropLongText()
 			}
 		}
 	}
@@ -160,6 +175,28 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 		})
 	}
 	return res, nil
+}
+
+// addEntities sends each column's kept long text to the language-model service, one request
+// per column, and counts what it found. When the service fails, the columns keep what the
+// patterns found.
+func addEntities(ctx context.Context, ec detect.EntityCounter, samplers []*detect.ColumnSampler) {
+	if ec == nil {
+		return
+	}
+	for _, s := range samplers {
+		if s == nil || len(s.LongText()) == 0 {
+			continue
+		}
+		found, err := ec.Count(ctx, s.LongText())
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		s.AddEntities(found)
+	}
 }
 
 // platformSafe reports whether the platform accepts a name: 1 to 255 bytes of valid UTF-8

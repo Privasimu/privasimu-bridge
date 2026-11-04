@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/privasimu/bridge/internal/detect"
 )
@@ -24,6 +25,25 @@ type Options struct {
 	Key []byte
 	// ChildCommand overrides how the PDF child process is started (tests).
 	ChildCommand func() (string, []string, error)
+	// Entities, when set, also examines the first EntityMaxBytes of a file's text (when it
+	// has at least EntityMinChars characters) with a local language-model service; only its
+	// counts are kept (detection.nlp).
+	Entities       detect.EntityCounter
+	EntityMinChars int
+	EntityMaxBytes int
+}
+
+// headWriter keeps the first max bytes written to it and discards the rest.
+type headWriter struct {
+	buf []byte
+	max int
+}
+
+func (h *headWriter) Write(p []byte) (int, error) {
+	if room := h.max - len(h.buf); room > 0 {
+		h.buf = append(h.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
 }
 
 // Scanner scans roots.
@@ -251,16 +271,22 @@ func (s *Scanner) examine(ctx context.Context, r *os.Root, root *Root, content b
 		return res
 	}
 	tc := detect.NewTextCounter(s.opts.MaxTextBytes)
+	var w io.Writer = tc
+	var head *headWriter
+	if s.opts.Entities != nil && s.opts.EntityMaxBytes > 0 {
+		head = &headWriter{max: s.opts.EntityMaxBytes}
+		w = io.MultiWriter(tc, head)
+	}
 	switch j.kind {
 	case kindText:
-		err = writeText(tc, io.LimitReader(f, s.opts.MaxFileBytes))
+		err = writeText(w, io.LimitReader(f, s.opts.MaxFileBytes))
 	case kindDOCX:
-		err = extractDOCX(tc, f, st.Size(), ooxmlLimits{maxEntryBytes: s.opts.MaxTextBytes * 8, maxTotalBytes: s.opts.MaxTextBytes * 8})
+		err = extractDOCX(w, f, st.Size(), ooxmlLimits{maxEntryBytes: s.opts.MaxTextBytes * 8, maxTotalBytes: s.opts.MaxTextBytes * 8})
 	case kindXLSX:
-		err = extractXLSX(tc, f, st.Size(), ooxmlLimits{maxEntryBytes: s.opts.MaxTextBytes * 8, maxTotalBytes: s.opts.MaxTextBytes * 8})
+		err = extractXLSX(w, f, st.Size(), ooxmlLimits{maxEntryBytes: s.opts.MaxTextBytes * 8, maxTotalBytes: s.opts.MaxTextBytes * 8})
 	case kindPDF:
 		var truncated bool
-		truncated, err = s.pdf.extract(ctx, tc, f)
+		truncated, err = s.pdf.extract(ctx, w, f)
 		res.Truncated = truncated
 	}
 	_ = tc.Close()
@@ -286,6 +312,15 @@ func (s *Scanner) examine(ctx context.Context, r *os.Root, root *Root, content b
 		res.Truncated = true
 	}
 	counts := tc.Counts()
+	if head != nil {
+		text := string(head.buf)
+		clear(head.buf)
+		if utf8.RuneCountInString(text) >= s.opts.EntityMinChars {
+			if found, err := s.opts.Entities.Count(ctx, []string{text}); err == nil && len(found) == 1 {
+				counts = detect.MergeEntityCounts(counts, found[0])
+			}
+		}
+	}
 	if len(counts) > 0 {
 		res.Categories = counts
 	}

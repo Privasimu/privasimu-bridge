@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Thresholds decide when sampled values make a column personal data.
@@ -44,6 +45,43 @@ type ColumnSampler struct {
 	matches            map[Category]int
 	strength           map[Category]float64
 	enc, masked, plain int
+
+	// Long text kept for an EntityCounter (KeepLongText): values of at least textMin
+	// characters, at most textMax bytes in all, dropped by AddEntities.
+	textMin, textMax, textBytes int
+	texts                       []string
+}
+
+// KeepLongText makes the sampler keep long text values for an EntityCounter: values of at
+// least minChars characters, at most maxBytes bytes in all. They stay in memory on this
+// server until AddEntities drops them.
+func (s *ColumnSampler) KeepLongText(minChars, maxBytes int) {
+	s.textMin, s.textMax = minChars, maxBytes
+}
+
+// LongText returns the kept values.
+func (s *ColumnSampler) LongText() []string { return s.texts }
+
+// AddEntities counts what an EntityCounter found in the kept values, once per value and
+// category (like the patterns count a long value), and drops the values.
+func (s *ColumnSampler) AddEntities(found []map[Category]int) {
+	for _, m := range found {
+		for c, n := range m {
+			if n > 0 && IsEntityCategory(c) {
+				s.matches[c]++
+				s.strength[c] += 0.8
+			}
+		}
+	}
+	s.DropLongText()
+}
+
+// DropLongText forgets the kept values (when no EntityCounter answered).
+func (s *ColumnSampler) DropLongText() {
+	for i := range s.texts {
+		s.texts[i] = ""
+	}
+	s.texts, s.textBytes = nil, 0
 }
 
 // NewColumnSampler starts sampling a column; the column name gives context hints.
@@ -72,6 +110,10 @@ func (s *ColumnSampler) Add(value string, null bool) {
 		s.masked++
 	default:
 		s.plain++
+		if s.textMin > 0 && s.textBytes+len(v) <= s.textMax && utf8.RuneCountInString(v) >= s.textMin {
+			s.texts = append(s.texts, v)
+			s.textBytes += len(v)
+		}
 	}
 	if len(v) <= longValue {
 		if m, ok := ClassifyValue(v, s.hints); ok {
@@ -122,7 +164,9 @@ func (s *ColumnSampler) Result(th Thresholds) ContentResult {
 		}
 	}
 	best, bestN := Category(""), 0
-	for _, c := range ValueCategories() { // fixed order breaks ties deterministically
+	// Fixed order breaks ties deterministically; validated identifiers first, then what an
+	// EntityCounter added.
+	for _, c := range append(ValueCategories(), EntityCategories()...) {
 		if n := s.matches[c]; n > bestN {
 			best, bestN = c, n
 		}
