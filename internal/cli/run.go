@@ -182,6 +182,10 @@ func (a *app) cmdEnroll(args []string) error {
 	defer cancel()
 	resp, err := agent.Enroll(ctx, cfg, secrets.NewResolver(cfg), client, *token)
 	if err != nil {
+		var ae *agent.APIError
+		if errors.As(err, &ae) && ae.Code == agent.ErrHTTPBasicAuth {
+			return errors.New(i18n.T("cli.enroll.basic_auth"))
+		}
 		return errors.New(i18n.T("cli.enroll.failed", err.Error()))
 	}
 	a.printf("cli.enroll.done", resp.AgentID, resp.Organization.Name)

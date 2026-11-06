@@ -296,7 +296,10 @@ its lease expired; abandons a job when its lease is withdrawn or the agent is re
 (409/404/403/401); retries 429/5xx with `Retry-After`; uploads parts of at most 200 items
 and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and an extra CA file
 for an on-premise platform. Its inventory always carries a label (the id
-when none is configured) and never more than the platforms accept.
+when none is configured) and never more than the platforms accept. HTTP Basic Auth in
+front of the platform (a 401 with `WWW-Authenticate: Basic` and no protocol envelope) is
+named as such and not taken for a refused token: the agent cannot pass it, because its
+token travels in the same `Authorization` header, so the agent path must be exempted there.
 
 **Deadlines, the watchdog and progress (revision 5, proposal; 6 November 2026).** Every job
 has a deadline (connection test 10 minutes, database scan 30 minutes, file scan 6 hours,
@@ -449,9 +452,16 @@ A literal password in the file is a validation error that never echoes the value
 
 ## 11. Operations
 
-- **Install**: `init` (configuration, store key, first API key), `secret set`, `check`,
+- **Install**: `init --mode a|b` (configuration and store key; mode A also the first API
+  key, mode B the agent section without a server or key; without `--mode` it follows
+  `--platform-url` or `--public-url`, or asks on a terminal), `secret set`, `check`,
   `service install` (Windows service with delayed automatic start and restart on
-  failure, or a hardened systemd unit), Docker image (distroless, non-root, read-only).
+  failure, or a hardened systemd unit), Docker image (distroless, non-root, read-only; its
+  state directory belongs to the runtime user, so a new named volume does too). In mode B,
+  `check` sends the agent's own unauthenticated probe (`GET` of the poll route, which both
+  platform lines answer with 405) and names an untrusted CA (`agent.ca_file`), a host name
+  the certificate lacks, HTTP Basic Auth or another refusal in front of the platform, a
+  redirect, or an address without the agent API.
 - **Logs**: JSON lines to standard error, or `logs/bridge.log` when running as a
   service. **Audit**: `logs/audit.jsonl` (rotated by size), one event per request, job or
   file scan, never a value.

@@ -10,7 +10,11 @@ import (
 
 // TemplateData fills the configuration file written by init.
 type TemplateData struct {
-	Language    string
+	Language string
+	// ModeB writes a mode B configuration: the agent section filled in, no server section
+	// and no API key. Otherwise the file is for mode A (the server section with the first
+	// API key) and keeps an empty agent section for later.
+	ModeB       bool
 	Listen      string
 	PublicURL   string
 	KeyID       string
@@ -59,6 +63,22 @@ var comments = map[string][2]string{
 		"Mode B: outbound-only agent (privasimu-bridge agent). Fill platform_url, then run\n# privasimu-bridge agent enroll --token <enrollment token>.",
 		"Mode B: agen yang hanya keluar (privasimu-bridge agent). Isi platform_url, lalu jalankan\n# privasimu-bridge agent enroll --token <token pendaftaran>.",
 	},
+	"agent_b": {
+		"Mode B: this bridge polls Privasimu over HTTPS and opens no port. platform_url is the\n# address of the Privasimu backend without /api (the install guide in Privasimu shows it).\n# Then run: privasimu-bridge agent enroll --token <enrollment token>",
+		"Mode B: bridge ini menghubungi Privasimu lewat HTTPS dan tidak membuka port. platform_url\n# adalah alamat backend Privasimu tanpa /api (panduan pemasangan di Privasimu menampilkannya).\n# Lalu jalankan: privasimu-bridge agent enroll --token <token pendaftaran>",
+	},
+	"ca_file": {
+		"PEM file of the CA that issued Privasimu's certificate, when it is not publicly trusted.",
+		"Berkas PEM CA penerbit sertifikat Privasimu, bila CA itu tidak dipercaya publik.",
+	},
+	"parallel": {
+		"Jobs run at the same time (1 to 10). 1 runs them one after another, the lowest load.",
+		"Tugas yang berjalan bersamaan (1 sampai 10). 1 menjalankannya satu per satu, beban terendah.",
+	},
+	"no_server": {
+		"Mode A (an HTTPS server Privasimu calls) is not set up in this file: run\n# privasimu-bridge init --mode a in another directory to create such a configuration.",
+		"Mode A (server HTTPS yang dipanggil Privasimu) tidak disiapkan di berkas ini: jalankan\n# privasimu-bridge init --mode a di direktori lain untuk membuat konfigurasi seperti itu.",
+	},
 	"sources": {
 		"Databases this bridge may scan. Store each password with:\n#   privasimu-bridge secret set <name>",
 		"Basis data yang boleh dipindai bridge ini. Simpan setiap password dengan:\n#   privasimu-bridge secret set <nama>",
@@ -85,7 +105,19 @@ const configTemplate = `# {{c "head"}}
 
 language: {{.Language}}
 state_dir: {{q .StateDir}}
+{{if .ModeB}}
+# {{c "agent_b"}}
+agent:
+  platform_url: {{q .PlatformURL}}
+  token: "secret:agent_token"
+  # {{c "ca_file"}}
+  ca_file: ""
+  allowed_jobs: [test_source, scan_database, scan_files]
+  # {{c "parallel"}}
+  max_parallel_jobs: 1
 
+# {{c "no_server"}}
+{{else}}
 # {{c "server"}}
 server:
   listen: {{q .Listen}}
@@ -114,7 +146,7 @@ agent:
   agent_id: ""
   token: "secret:agent_token"
   allowed_jobs: [test_source, scan_database, scan_files]
-
+{{end}}
 # {{c "sources"}}
 sources: []
 #  - id: core-banking

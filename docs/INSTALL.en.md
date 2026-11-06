@@ -87,26 +87,54 @@ full path in the commands below.
 
 ### Docker
 
-See `deploy/docker/docker-compose.yml`. The image runs as a non-root user with a
+See `deploy/docker/docker-compose.yml`. The image runs as the non-root user `65532` with a
 read-only file system; mount the configuration at `/etc/privasimu-bridge` and a volume at
 `/var/lib/privasimu-bridge`. Run `init` once with
-`--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`.
+`--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`
+and `--mode b` (or `--mode a`, section 2).
+
+**Ownership.** Both folders must belong to the user `65532`, or `init` stops with
+"cannot be written":
+
+- the configuration folder, before the first `init`:
+  `mkdir -p config && sudo chown 65532:65532 config`;
+- the state volume belongs to `65532` by itself when an image of 6 November 2026 or later
+  creates it. A volume created by an older image, or a bind mount, is owned by root: give
+  it to `65532` once. The image has no shell, so another one does it (`docker volume ls`
+  shows the volume's name, `<folder>_bridge-state` with the example file):
+  ```sh
+  docker run --rm -v <folder>_bridge-state:/state busybox:1.37 chown -R 65532:65532 /state
+  sudo chown -R 65532:65532 ./state      # a bind mount instead of a volume
+  ```
+
 For package scans (section 11.1) use `privasimu-bridge:<version>-scan`, which adds pinned
 Syft and Grype. Images are signed with cosign; verify before you run one:
 `cosign verify --key cosign.pub privasimu-bridge:<version>-scan` (`cosign.pub` from
-`release-keys/` of the bridge repository).
+`release-keys/` of the bridge repository). A database account for a bridge in Docker is
+explained in section 6 ("The bridge in Docker").
 
 Every command prints English by default; add `--lang id` (or set
 `PRIVASIMU_BRIDGE_LANG=id`) for Indonesian.
 
 ## 2. Create the configuration
 
+Choose the mode (section 0) with `--mode`:
+
 ```sh
-# Linux
-sudo privasimu-bridge init --public-url https://bridge.example.co.id:8443
-# Windows (Administrator)
-privasimu-bridge init --public-url https://bridge.example.co.id:8443
+# Mode B (agent: the bridge polls Privasimu, no port, no certificate)
+sudo privasimu-bridge init --mode b --platform-url https://privasimu.example.co.id
+# Mode A (Privasimu calls the bridge)
+sudo privasimu-bridge init --mode a --public-url https://bridge.example.co.id:8443
+# Windows (Administrator): the same without sudo
 ```
+
+- `--mode b` writes the `agent` section with `platform_url` (the address of the Privasimu
+  backend without `/api`; Privasimu's own install guide shows it), no `server` section and
+  no API key. Continue with section 11.
+- `--mode a` writes the `server` section and prints the first API key (below), as `init`
+  always did. Continue with section 3.
+- Without `--mode`, a `--platform-url` alone means mode B and a `--public-url` mode A;
+  otherwise `init` asks on a terminal, and writes mode A in a script.
 
 `init` creates:
 
@@ -118,13 +146,14 @@ privasimu-bridge init --public-url https://bridge.example.co.id:8443
 | certificate folder | `/etc/privasimu-bridge/tls/` | `C:\ProgramData\PrivasimuBridge\tls\` |
 | audit log | `/var/log/privasimu-bridge/audit.jsonl` | `C:\ProgramData\PrivasimuBridge\logs\audit.jsonl` |
 
-It also prints an **API key** (`pvbk_…`) **once**. Copy it to your password manager now:
-only its hash is stored, it cannot be shown again (you can create a new one with
-`privasimu-bridge key create`). On Windows the folder is restricted to Administrators and
-SYSTEM.
+In mode A it also prints an **API key** (`pvbk_…`) **once**. Copy it to your password
+manager now: only its hash is stored, it cannot be shown again (you can create a new one
+with `privasimu-bridge key create`). Mode B creates no certificate folder and no API key.
+On Windows the folder is restricted to Administrators and SYSTEM.
 
-Options: `--listen` (default `0.0.0.0:8443`), `--dir`, `--state-dir`, `--log-dir`,
-`--platform-url` (mode B), `--force` (rewrite the configuration; the store key is kept).
+Options: `--mode a|b`, `--listen` (default `0.0.0.0:8443`), `--dir`, `--state-dir`,
+`--log-dir`, `--public-url` (mode A), `--platform-url` (mode B), `--force` (rewrite the
+configuration; the store key is kept).
 
 ## 3. Firewall (mode A)
 
@@ -236,6 +265,15 @@ sudo privasimu-bridge check          # Windows: privasimu-bridge check
 Each line is `[OK]`, `[WARN]` or `[FAIL]`. At this point you should see the configuration,
 the secret store and the certificate. Fix every `[FAIL]` before you continue.
 
+In mode B there is no certificate to check; `check` instead calls the agent API of
+Privasimu the way the agent does (with `agent.ca_file` and the proxy) and names what stands
+in the way: a certificate this server does not trust (set `agent.ca_file`), a certificate
+for another host name, HTTP Basic Auth or another refusal in front of Privasimu, a
+redirect, or an address without the agent API (section 12). When all is well:
+```text
+[OK]   mode B: the bridge agent API answers at https://privasimu.example.co.id/api/bridge-agent/v1/poll (TLS verified)
+```
+
 ## 6. Read-only database accounts
 
 Use a dedicated account per database that can read the catalog and, if you enable
@@ -264,6 +302,42 @@ account with more rights cannot write through it, and the server itself stops a 
 after the source's `timeout` (`max_execution_time` on MySQL 5.7.8+, `max_statement_time`
 on MariaDB 10.1+); a query waits at most 5 seconds behind a metadata lock
 (`lock_wait_timeout`).
+
+**The bridge in Docker.** A database checks the address a connection comes from, and with
+Docker that is not always the server's own address:
+
+| Where the database runs | The address it sees | Grant the account to |
+|---|---|---|
+| another server | the Docker host's address (Docker translates outgoing connections) | the Docker host's address |
+| the Docker host itself, or a container on the same Docker network | the bridge container's address on the Docker network, e.g. `172.18.0.5`, which can change when the container is recreated | a fixed container address (`ipv4_address` in `deploy/docker/docker-compose.yml`), or that network's subnet |
+
+To see the address, run `privasimu-bridge check`: MySQL names it in its refusal, for
+example `Access denied for user 'privasimu_ro'@'172.30.10.10'`. A MySQL account is a user
+**and** a host: grants to `'privasimu_ro'@'10.10.5.21'` do nothing for
+`'privasimu_ro'@'172.30.10.10'`. Exact examples:
+
+```sql
+-- The bridge's fixed address on its Docker network (docker-compose.yml: ipv4_address):
+CREATE USER 'privasimu_ro'@'172.30.10.10' IDENTIFIED BY '<strong password>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'172.30.10.10';
+
+-- Or the whole Docker subnet. The netmask form works in MySQL 5.7, 8.x and MariaDB:
+CREATE USER 'privasimu_ro'@'172.30.10.0/255.255.255.0' IDENTIFIED BY '<strong password>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'172.30.10.0/255.255.255.0';
+-- MySQL 8.0.23 and later also accept 'privasimu_ro'@'172.30.10.0/24'.
+
+-- A database on another server sees the Docker host (here 10.10.5.21):
+CREATE USER 'privasimu_ro'@'10.10.5.21' IDENTIFIED BY '<strong password>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'10.10.5.21';
+```
+
+Avoid `'%'`; when a pattern is needed, keep it to the subnet (`'privasimu_ro'@'172.30.10.%'`).
+The grant-table reads of section 7.2 go to the same account (user and host). PostgreSQL
+allows the same addresses in `pg_hba.conf`:
+```text
+hostssl corebank privasimu_ro 172.30.10.10/32 scram-sha-256
+hostssl corebank privasimu_ro 172.30.10.0/24  scram-sha-256
+```
 
 **Microsoft SQL Server**
 ```sql
@@ -661,9 +735,14 @@ same for both.
    access is set explicitly to `ubah` in Menu Preferences (for the user's division or for
    the user personally). Other users with Data Discovery access can see the agents and
    link systems to their sources.
-2. On the bridge server set `agent.platform_url` in `bridge.yaml` (and `agent.proxy_url` /
+2. On the bridge server create the configuration with
+   `init --mode b --platform-url https://…` (section 2), or set `agent.platform_url` in an
+   existing `bridge.yaml`: the address of the Privasimu backend without `/api`, as
+   Privasimu's own install guide shows it. Add `agent.proxy_url` /
    `agent.proxy_auth: "secret:proxy_auth"` when the server reaches the internet through a
-   proxy; `agent.ca_file` for an on-premise Privasimu with an internal certificate).
+   proxy, and `agent.ca_file` when Privasimu's certificate comes from an internal or private
+   CA. If a web server in front of Privasimu asks for a password (HTTP Basic Auth, common on
+   staging servers), exempt `/api/bridge-agent/` from it (section 12).
 3. Enroll and install:
    ```sh
    sudo privasimu-bridge agent enroll --token pvbe_…
@@ -791,6 +870,46 @@ What Privasimu shows (`error_kind`) and what to do:
 | `bridge_contract` | "Respons layanan jembatan tidak sesuai kontrak." | The address points to something that is not this bridge (a proxy error page, another service). |
 | `bridge_incomplete` | (a table marked incomplete) | One table failed or the listing was incomplete; the other tables are kept. Check the audit log for that table. |
 | `limit` | (a table or the listing marked) | More than 500 tables or 1000 columns: scan per schema. |
+
+**Mode B.** `privasimu-bridge check` names what stands between the agent and Privasimu:
+
+| `check` says | Cause and fix |
+|---|---|
+| "signed by an authority this server does not trust" | Privasimu's certificate comes from an internal or private CA: put that CA (PEM, with its intermediates) in a file and set `agent.ca_file`. A public certificate needs nothing. |
+| "is not valid for that name (it is valid for: …)" | `agent.platform_url` uses a name the certificate does not hold (often an IP address or an internal alias): use one of the names listed, or have the certificate issued for this one. |
+| "is not valid now (valid from … to …)" | The certificate expired, or this server's clock is wrong. |
+| "asks for HTTP Basic Auth" | A web server in front of Privasimu asks for a password. The agent sends its own token in the `Authorization` header, so it cannot send a Basic Auth password as well: exempt `/api/bridge-agent/` there (below). Every agent request is still authenticated by its token. `agent enroll` and the agent log say the same. |
+| "redirect to …" | The address redirects (http to https, a login page, another host): set `agent.platform_url` to the final https address; the agent never follows redirects. |
+| "no bridge agent API at …" | `agent.platform_url` is not the backend address (it is given without `/api`), or that Privasimu version has no bridge agents. |
+| "refused … (not the agent API)" | A firewall, WAF or access rule in front of Privasimu: let `/api/bridge-agent/` through. |
+| "cannot be written" (during `init`) | Docker: the configuration folder or the state volume belongs to root (section 1, Docker). |
+
+Exempting the agent path from Basic Auth, with the rest of the site unchanged (use the
+same upstream as your existing `/api/` route):
+
+```nginx
+location /api/bridge-agent/ {
+    auth_basic off;
+    proxy_pass http://privasimu_api;    # the upstream of location /api/
+}
+```
+```apache
+<Location "/api/bridge-agent/">
+    Require all granted
+</Location>
+```
+```caddy
+@agent path /api/bridge-agent/*
+handle @agent {
+    reverse_proxy privasimu-api:8080
+}
+handle {
+    basic_auth {
+        staff <bcrypt hash>
+    }
+    reverse_proxy privasimu-api:8080
+}
+```
 
 Test the bridge by hand from a machine that is allowed to connect (never put a real key in
 scripts or tickets):
