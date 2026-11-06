@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/privasimu/bridge/internal/audit"
@@ -76,6 +77,12 @@ type Agent struct {
 	sleep func(ctx context.Context, d time.Duration) bool
 	// minRenew is the shortest interval between lease renewals.
 	minRenew time.Duration
+	// grace is how long the work of a job may run after its deadline or cancellation
+	// before the watchdog abandons it (watchdogGrace; tests shorten it).
+	grace time.Duration
+	// abandoned counts work the watchdog abandoned that has not returned yet: each one may
+	// still use a CPU until it ends or the service restarts (Status.AbandonedJobs).
+	abandoned atomic.Int32
 	// features are the platform_features of the last poll answer that shape the inventory
 	// (source_kind:packages and source_engine:*): packages targets and database sources of
 	// engines beyond revision 2 are only sent to a platform that lists them, because an
@@ -103,7 +110,11 @@ type Status struct {
 	LastError           string    `json:"last_error,omitempty"`
 	ConsecutiveFailures int       `json:"consecutive_failures"`
 	RunningJobs         int       `json:"running_jobs"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	// AbandonedJobs counts job work the watchdog gave up on that is still running: the
+	// jobs were reported and their slots freed, but each may keep a CPU busy until it ends
+	// or the service restarts. healthcheck --mode agent reports it.
+	AbandonedJobs int       `json:"abandoned_jobs"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 const (
@@ -140,7 +151,7 @@ var ErrNotEnrolled = errors.New("the agent is not enrolled")
 func New(d Deps) (*Agent, error) {
 	a := &Agent{cfg: d.Config, client: d.Client, resolver: d.Resolver, files: d.Files, packages: d.Packages, entities: d.Entities, audit: d.Audit, log: d.Log,
 		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
-		withheld: map[string]bool{}, sleep: sleepCtx, minRenew: 5 * time.Second}
+		withheld: map[string]bool{}, sleep: sleepCtx, minRenew: 5 * time.Second, grace: watchdogGrace}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
@@ -547,7 +558,8 @@ func StoreToken(cfg *config.Config, r *secrets.Resolver, token string) error {
 func (a *Agent) writeStatus() {
 	a.mu.Lock()
 	st := Status{AgentID: a.agentID, Version: buildinfo.Version, LastPollOK: a.lastOK, LastError: a.lastErr,
-		ConsecutiveFailures: a.failures, RunningJobs: len(a.running), UpdatedAt: time.Now().UTC()}
+		ConsecutiveFailures: a.failures, RunningJobs: len(a.running), AbandonedJobs: int(a.abandoned.Load()),
+		UpdatedAt: time.Now().UTC()}
 	a.mu.Unlock()
 	raw, _ := json.MarshalIndent(st, "", "  ")
 	_ = secrets.WriteFileAtomic(filepath.Join(a.stateDir, statusFile), raw, 0o600)

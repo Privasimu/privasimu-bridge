@@ -1,7 +1,8 @@
 # Agent protocol 1 (mode B): platform contract
 
 Status: **normative, revision 3 (2 November 2026)**; revision 4 (further database engines)
-is a **proposal** the agent already follows (section 13). The agent side is implemented and
+and revision 5 (job deadlines, where a job stopped, progress semantics; 6 November 2026) are
+**proposals** the agent already follows (section 13). The agent side is implemented and
 tested in this repository (`internal/agent`, against an in-memory platform that follows
 this document, `internal/agent/fakeplatform_test.go`). Both Privasimu Nexus lines implement
 the platform side (branch `feat/bridge-agent-mode-b-2026-10-31` in each backend); revision 2
@@ -346,6 +347,27 @@ Response `200`: `{"lease_seconds":120,"cancel_requested":false}`. When an admin 
 the job, `cancel_requested` is true; the agent stops and sends `fail` with
 `error_code: "canceled"`.
 
+**Heartbeat and progress (revision 5).** This route is both the lease renewal and the
+progress report. The agent sends it every `lease_seconds / 3` (40 seconds) while a job runs.
+Its four values change only when the job advanced; a renewal while nothing advanced repeats
+the previous values exactly and is a heartbeat, never progress:
+
+| `stage` | Job types | `done` / `total` |
+|---|---|---|
+| `starting`, `connect`, `list_tables` | test_source, scan_database | 0 / 0 |
+| `tables` | scan_database | tables finished / tables listed |
+| `files` | scan_files | files seen in this walk / files the root's previous scan saw (0 when unknown) |
+| `waiting`, `inventory`, `matching` | scan_packages | 0 / 0 |
+| `upload` | every job with parts | parts sent / parts to send |
+
+Stages only move forward in this order; `done` never decreases within a stage, and
+`progress` (`done` × 100 / `total`, at most 99, 0 while `total` is 0) never decreases within
+an attempt. A platform that detects stalls (contract P-3) compares all four values with the
+previous renewal under the same lease, not the percentage alone: one per cent of 500 tables,
+or a file walk whose total is unknown, can take longer than its stall limit while every
+table or file is real advancement. Stages without counts are bounded by the agent itself
+(statement timeouts, tool timeouts, the job deadline of section 6.8).
+
 ### 5.5 `POST /jobs/{job_id}/parts`
 
 Header `X-Lease-Token`. Uploads one slice of the result. Body at most 1 MiB.
@@ -386,6 +408,15 @@ Header `X-Lease-Token`.
 Request: `{"error_kind":"auth","error_code":"database_auth","retryable":false,"stage":"connect"}`
 — each *word* (`error_code` up to 60 characters). There is never a free-text message:
 driver messages can quote values or internal names, so the agent only sends codes.
+
+Revision 5 adds an optional key `table`, after `stage`, when a database scan stopped at a
+table (its deadline, a cancellation, the watchdog of section 6.8):
+`{"error_kind":"timeout","error_code":"timeout","retryable":true,"stage":"sampling","table":"HR.EMPLOYEES"}`.
+It is `schema.table` (the table alone for an engine without schemas), 1 to 255 bytes of
+valid UTF-8 without a C0 control character or DEL (the name rule of section 6.4): a name,
+never a value. `stage` is then the step that table was in: `columns`, `sampling`,
+`detection` (values being classified), `entities` (the local language model) or `access`
+(section 13, revision 4). Platforms of earlier revisions ignore the key (section 4, step 8).
 
 Effect: if `retryable` is true, `error_code` is not `canceled` and `attempt < 2`, the job
 goes back to `queued`; otherwise it is `failed` and the system records the failure with
@@ -561,6 +592,8 @@ job types.
 
 `error_kind` is stored next to the text as the platform's `error_kind`; failures the
 platform makes itself (`agent_timeout`, `agent_revoked`) have `error_kind` `platform`.
+A `timeout` or `canceled` of a database scan may carry `table` (revision 5, section 5.7);
+the platform stores it with the failure and shows it with the text and the stage.
 
 ### 6.7 Result of `scan_packages` (parts of kind `packages`, revision 3)
 
@@ -647,6 +680,32 @@ job; parts beyond are ignored and the job is stored with `truncated` true.
   source or mirror.
 - One package scan runs at a time per agent; a job that arrives while a scan of its target
   runs waits for it and uses its report.
+
+### 6.8 Deadlines and the watchdog (revision 5; normative for the agent, informative for the platforms)
+
+Every job has a deadline for its work, lowered by `deadline_seconds`: `test_source` 10
+minutes, `scan_database` 30 minutes, `scan_files` 6 hours, `scan_packages` twice its tool
+timeout (`packages.timeout`, lowered by `deadline_seconds`) plus a minute, because it may
+first wait for another package scan. Every stage of the work honours it: catalog and
+sampling queries carry the job's context, classifying sampled values stops once it ends,
+and the scan returns at the deadline even when a database call does not.
+
+- **At the deadline** the agent sends `fail` with `error_kind` `timeout`, `error_code`
+  `timeout`, `retryable` true, `stage` the stage reached and, for a database scan, `table`
+  (section 5.7), and logs the table and column locally. Nothing else of the scan is sent.
+- **The watchdog.** If the work has not returned 60 seconds after its deadline (or after a
+  cancellation), the agent stops waiting for it: it sends `fail` as above but with
+  `retryable` false (work that ignored its deadline would most likely hang again), frees the
+  job's slot for the next poll, logs `job abandoned` with the stage, table and column, and
+  counts the work in its local status (`abandoned_jobs`, which makes
+  `healthcheck --mode agent` unhealthy) until it ends. The job id leaves `running_jobs`.
+- A job cancelled by the platform (`cancel_requested`) is reported as `canceled` with the
+  stage and table it stopped at; a job whose lease is withdrawn is not reported (as
+  before).
+
+So a job never holds its lease, or a slot of `max_parallel_jobs`, longer than its deadline
+plus about two minutes (the grace period, then one renewal interval); the platform's own
+stall detection (contract P-3) can be shorter.
 
 ## 7. Persisting results
 
@@ -954,6 +1013,13 @@ Since revision 3 also:
   `score_tenths` as an integer; the six new failure texts;
 - an agent of revision 2 (no packages kind, no capability) behaves exactly as before.
 
+Since revision 5 (proposal) also:
+
+- a `fail` with and without `table` is accepted, and `table` is stored and shown with the
+  failure; a `table` outside the name rule of section 6.4 is `400 invalid_request`;
+- renewals that repeat the previous four progress values do not count as advancement for a
+  stall check, and any change of one of them does.
+
 The agent in this repository runs the same flows against an in-memory platform
 (`internal/agent/fakeplatform_test.go`) that follows this document, including the field
 rules of section 5 (every agent test fails when the agent sends a request the platforms
@@ -1061,6 +1127,20 @@ platform's registry) and `redshift`, `clickhouse`, `bigquery`, `databricks` and 
 (once the registry offers them) from a configured source (local credentials), and refuses
 them with request credentials (`unsupported_db_type`), so their credentials stay on the
 bridge.
+
+**Revision 5, proposal (6 November 2026; not normative until both lines implement it).**
+From the owner's test against the Go staging: a scan hung at 87 % at full CPU on one core,
+without I/O, past its 30-minute deadline, while its renewals kept the lease alive. The cause
+was a loop in the agent's text detector (it never advanced past a `+` or `(` glued to a word
+and followed by a digit, as in `2+2` or `Lantai(2)`), fixed in the agent. Additive, protocol
+1, `X-Bridge-Protocol: 1` and `errors.json` unchanged:
+
+1. *Where a job stopped*: `fail` may carry `table` (section 5.7); `stage` names the step of
+   that table. Platforms of revision 4 or earlier ignore the key.
+2. *Heartbeat and progress* (section 5.4): the four values of a renewal change only on real
+   advancement, `progress` never decreases, and a stall check compares all four values.
+3. *Deadlines and the watchdog* (section 6.8): every job type has a deadline; work that
+   ignores it is abandoned 60 seconds later, reported (`retryable` false) and its slot freed.
 
 **Open items** (not normative yet):
 

@@ -199,6 +199,9 @@ func (a *app) cmdHealthcheck(args []string) error {
 		if time.Since(st.LastPollOK) > limit {
 			return errors.New(i18n.T("cli.health.stale", st.LastError))
 		}
+		if st.AbandonedJobs > 0 {
+			return errors.New(i18n.T("cli.health.abandoned", st.AbandonedJobs))
+		}
 		a.printf("cli.health.ok")
 		return nil
 	}

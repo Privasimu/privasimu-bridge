@@ -46,6 +46,21 @@ func (h *headWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// ctxWriter ends an extraction once the scan's context ends: every extractor writes the
+// text in chunks, so a cancelled or expired scan stops at the next chunk instead of reading
+// and examining the rest of the file.
+type ctxWriter struct {
+	ctx context.Context
+	w   io.Writer
+}
+
+func (c ctxWriter) Write(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.w.Write(p)
+}
+
 // Scanner scans roots.
 type Scanner struct {
 	opts Options
@@ -227,7 +242,18 @@ func (s *Scanner) Scan(ctx context.Context, root *Root, progress Progress) (*Rep
 		return nil
 	})
 	close(jobs)
-	wg.Wait()
+	// A file whose examination does not stop when the context ends (a bug in a detector)
+	// must not hold the scan past its deadline: the scan ends, the report is dropped.
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -277,6 +303,7 @@ func (s *Scanner) examine(ctx context.Context, r *os.Root, root *Root, content b
 		head = &headWriter{max: s.opts.EntityMaxBytes}
 		w = io.MultiWriter(tc, head)
 	}
+	w = ctxWriter{ctx: ctx, w: w}
 	switch j.kind {
 	case kindText:
 		err = writeText(w, io.LimitReader(f, s.opts.MaxFileBytes))

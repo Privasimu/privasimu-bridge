@@ -242,4 +242,8 @@ var catalog = map[string][2]string{
 	"cli.health.bad":       {"the health endpoint answered %d", "endpoint kesehatan menjawab %d"},
 	"cli.health.no_status": {"the agent has not written a status yet", "agen belum menulis status"},
 	"cli.health.stale":     {"the agent has not reached the platform recently (last error: %s)", "agen belum menjangkau platform akhir-akhir ini (galat terakhir: %s)"},
+	"cli.health.abandoned": {
+		"%d job(s) passed their deadline and did not stop; they were reported failed and their slots freed, but may still use CPU: restart the service and send the log (job_id, stage, table) to Privasimu support",
+		"%d tugas melewati batas waktunya dan tidak berhenti; tugas itu sudah dilaporkan gagal dan slotnya dibebaskan, tetapi mungkin masih memakai CPU: jalankan ulang layanan dan kirim log (job_id, stage, table) ke dukungan Privasimu",
+	},
 }

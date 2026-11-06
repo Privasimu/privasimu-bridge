@@ -78,6 +78,12 @@ func isAlnum(c byte) bool { return isDigit(c) || isLetter(c) }
 
 // process examines candidates that start before the held-back tail (or all of them when
 // final) and then drops what is no longer needed for context.
+//
+// Every iteration moves forward or leaves the loop to wait for more text. A branch that
+// cannot advance by itself must still step over its byte: a '+' or '(' glued to a word
+// and followed by a digit ("2+2", "Lantai(2)") starts no candidate, and skipToken does not
+// move over it (neither is a token character). Before this rule such text kept the loop on
+// the same byte for ever, at full CPU and without I/O, so a scan never reached its deadline.
 func (t *TextCounter) process(final bool) {
 	b := t.buf
 	end := len(b)
@@ -88,19 +94,20 @@ func (t *TextCounter) process(final bool) {
 scan:
 	for i < end {
 		c := b[i]
+		next := i + 1
 		switch {
 		case c == '@':
-			i = t.email(i)
+			next = t.email(i)
 		case isDigit(c) || ((c == '+' || c == '(') && i+1 < len(b) && isDigit(b[i+1])):
 			if !leftBoundary(b, i) {
-				i = skipToken(b, i)
-				continue
+				next = skipToken(b, i)
+				break
 			}
-			next, ok := t.number(i, final)
+			n, ok := t.number(i, final)
 			if !ok {
 				break scan // the run continues past the buffered text; wait for more
 			}
-			i = next
+			next = n
 		case isLetter(c):
 			j := i
 			for j < len(b) && isAlnum(b[j]) {
@@ -112,10 +119,9 @@ scan:
 			if j-i >= 7 && j-i <= 9 && leftBoundary(b, i) && rightBoundary(b, j) {
 				t.word(i, j)
 			}
-			i = j
-		default:
-			i++
+			next = j
 		}
+		i = max(next, i+1)
 	}
 	t.cursor = i
 	if drop := t.cursor - contextBytes; drop > 0 {

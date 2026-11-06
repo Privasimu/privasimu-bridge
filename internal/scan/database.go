@@ -37,6 +37,8 @@ type DBOptions struct {
 	// group role (its zero value reports none).
 	Access    bool
 	RoleNames dbsource.RoleNaming
+	// Track, when set, follows the scan: its stage and the tables in progress (names only).
+	Track *Tracker
 }
 
 func (o DBOptions) maxTables() int {
@@ -116,8 +118,15 @@ func ListTables(ctx context.Context, c dbsource.Conn, o DBOptions) ([]dbsource.T
 
 // AnalyzeTable reads the columns of t and classifies them, sampling values when enabled.
 // A sampling failure does not fail the table: the columns are classified by name and the
-// error kind is reported.
+// error kind is reported. Once ctx ends, sampled values are dropped unexamined and the
+// table ends with the context's error, whatever the driver does.
 func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOptions) (TableAnalysis, error) {
+	return analyzeTable(ctx, c, t, o, o.Track.begin(qualified(t.Schema, t.Name)))
+}
+
+// analyzeTable is AnalyzeTable for a table already registered with the tracker.
+func analyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOptions, step *TableStep) (TableAnalysis, error) {
+	defer func() { step.end(ctx.Err() != nil) }()
 	cols, err := c.Columns(ctx, t)
 	if err != nil {
 		return TableAnalysis{}, err
@@ -146,19 +155,30 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 				}
 			}
 		}
+		step.set(stepSampling)
 		err := c.Sample(ctx, t, kept, o.Rows, func(i int, value string, null bool) {
-			if i >= 0 && i < len(samplers) && samplers[i] != nil {
-				samplers[i].Add(value, null)
+			// Classifying is the work without I/O: once the scan is over, values are only
+			// dropped, and the driver stops at its next row.
+			if ctx.Err() != nil || i < 0 || i >= len(samplers) || samplers[i] == nil {
+				return
 			}
+			step.examine(&kept[i].Name)
+			samplers[i].Add(value, null)
+			step.set(stepSampling)
 		})
+		if ctx.Err() != nil {
+			// Also when the driver answered nil: a value may have been dropped unexamined.
+			return TableAnalysis{}, ctx.Err()
+		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return TableAnalysis{}, ctx.Err()
-			}
 			res.SamplingError = dbsource.KindOf(err)
 		} else {
 			res.Sampled = true
+			step.set(stepEntities)
 			addEntities(ctx, o.Entities, samplers)
+			if ctx.Err() != nil {
+				return TableAnalysis{}, ctx.Err()
+			}
 			content = make([]*detect.ContentResult, len(kept))
 			for i, s := range samplers {
 				if s != nil {
@@ -185,6 +205,7 @@ func AnalyzeTable(ctx context.Context, c dbsource.Conn, t dbsource.Table, o DBOp
 	}
 	if pii, _ := res.PIIColumns(); o.Access && pii > 0 {
 		if ar, ok := c.(dbsource.AccessReader); ok {
+			step.set(stepAccess)
 			a, err := ar.TableAccess(ctx, t, o.RoleNames)
 			switch {
 			case errors.Is(err, dbsource.ErrAccessUnsupported):
@@ -257,17 +278,21 @@ type DatabaseResult struct {
 }
 
 // Database scans every table with bounded concurrency. progress is called after each
-// table. A cancelled or expired context stops the scan and returns its error.
+// table. A cancelled or expired context stops the scan and returns its error at once, also
+// when a table does not stop (a driver call that ignores its context): such a table is
+// left behind and its result dropped, so no step can hold a job past its deadline.
 func Database(ctx context.Context, c dbsource.Conn, o DBOptions, progress func(done, total int)) (DatabaseResult, error) {
 	started := time.Now()
 	res := DatabaseResult{Engine: c.Engine(), ServerVersion: c.ServerVersion(ctx), TLS: c.TLSInUse(), Sampling: o.Sampling,
 		Failed: []TableFailure{}}
+	o.Track.setStage(StageListTables, 0, 0)
 	tables, total, err := ListTables(ctx, c, o)
 	if err != nil {
 		return res, err
 	}
 	res.TablesTotal = total
 	res.Truncated = total > len(tables)
+	o.Track.setStage(StageTables, 0, len(tables))
 	workers := o.Concurrency
 	if workers <= 0 {
 		workers = 4
@@ -275,7 +300,7 @@ func Database(ctx context.Context, c dbsource.Conn, o DBOptions, progress func(d
 	results := make([]*TableAnalysis, len(tables))
 	failures := make([]string, len(tables))
 	var mu sync.Mutex
-	done := 0
+	done, over := 0, false
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	for i, t := range tables {
@@ -287,24 +312,43 @@ func Database(ctx context.Context, c dbsource.Conn, o DBOptions, progress func(d
 			break
 		}
 		wg.Add(1)
+		// Registered here, in listing order, so the oldest table in progress is the one
+		// that has waited longest, whatever the order the workers start in.
+		step := o.Track.begin(qualified(t.Schema, t.Name))
 		go func(i int, t dbsource.Table) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			a, err := AnalyzeTable(ctx, c, t, o)
+			a, err := analyzeTable(ctx, c, t, o, step)
 			mu.Lock()
 			defer mu.Unlock()
+			if over {
+				return // the scan has ended without this table
+			}
 			if err != nil {
 				failures[i] = dbsource.KindOf(err)
 			} else {
 				results[i] = &a
 			}
 			done++
+			o.Track.setStage(StageTables, done, len(tables))
 			if progress != nil {
 				progress(done, len(tables))
 			}
 		}(i, t)
 	}
-	wg.Wait()
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		mu.Lock()
+		over = true
+		mu.Unlock()
+		return res, ctx.Err()
+	}
 	if err := ctx.Err(); err != nil {
 		return res, err
 	}

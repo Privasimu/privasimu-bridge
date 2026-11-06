@@ -281,6 +281,10 @@ type FailRequest struct {
 	ErrorCode string `json:"error_code"`
 	Retryable bool   `json:"retryable"`
 	Stage     string `json:"stage"`
+	// Table (revision 5, proposal) names the table a database scan stopped at, as
+	// schema.table: a name like those of a tables part, never a value. Absent when the
+	// failure is not tied to a table. Platforms of earlier revisions ignore it.
+	Table string `json:"table,omitempty"`
 }
 
 // StatusResponse acknowledges complete and fail.

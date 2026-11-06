@@ -87,7 +87,11 @@ agent:
   # scan_packages (software inventory and vulnerability matching, see packages: below) is
   # opt-in: add it here to allow it. The agent then announces job:scan_packages.
   allowed_jobs: [test_source, scan_database, scan_files]
-  max_parallel_jobs: 1              # 1 to 10
+  # Jobs run at the same time (1 to 10, default 1: one after another, the lowest load).
+  # Each extra job needs about one free CPU core; a database scan opens at most 4
+  # connections to its source. Every job has a deadline; work that ignores it is abandoned
+  # 60 s later and its slot freed (see the install guide, section 11).
+  max_parallel_jobs: 1
   poll_min: 5s                      # at least 1s; the platform suggests 5s or 15s itself
   poll_max: 5m                      # at most 5m: a lost token rotation is retried in time
 
