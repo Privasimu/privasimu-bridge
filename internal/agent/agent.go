@@ -492,6 +492,8 @@ func refusalMessage(ae *APIError) string {
 	switch {
 	case ae.Code == ErrAgentRevoked:
 		return "this agent was revoked on the platform; create or renew an agent there and enroll again with: privasimu-bridge agent enroll"
+	case ae.Code == ErrHTTPBasicAuth:
+		return "a web server in front of Privasimu asks for HTTP Basic Auth; the agent sends its own token in the Authorization header and cannot pass it: exempt /api/bridge-agent/ from Basic Auth there (install guide, section 12), then run privasimu-bridge check"
 	case ae.Status == 403:
 		return "the platform refuses this agent because its organisation is not active (archived, deleted or frozen); ask the tenant admin"
 	}

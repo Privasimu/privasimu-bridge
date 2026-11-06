@@ -130,7 +130,28 @@ var catalog = map[string][2]string{
 		"Konfigurasi tidak ada di %s. Buat dengan \"privasimu-bridge init\" atau beri --config.",
 	},
 
-	"cli.init.usage":    {"Usage: privasimu-bridge init [--dir DIR] [--listen ADDR] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]", "Pemakaian: privasimu-bridge init [--dir DIR] [--listen ALAMAT] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]"},
+	"cli.init.usage":    {"Usage: privasimu-bridge init [--mode a|b] [--dir DIR] [--listen ADDR] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]", "Pemakaian: privasimu-bridge init [--mode a|b] [--dir DIR] [--listen ALAMAT] [--public-url URL] [--platform-url URL] [--state-dir DIR] [--log-dir DIR] [--force]"},
+	"cli.init.bad_mode": {"Unknown mode %q: use --mode a (Privasimu calls this bridge) or --mode b (this bridge polls Privasimu).", "Mode %q tidak dikenal: pakai --mode a (Privasimu memanggil bridge ini) atau --mode b (bridge ini menghubungi Privasimu)."},
+	"cli.init.ask_mode": {
+		"Mode? A = Privasimu calls this bridge over HTTPS (an inbound port); B = this bridge polls Privasimu (outbound only; also needed for file shares). [A/b]:",
+		"Mode? A = Privasimu memanggil bridge ini lewat HTTPS (port masuk); B = bridge ini menghubungi Privasimu (hanya keluar; juga untuk berbagi berkas). [A/b]:",
+	},
+	"cli.init.ask_platform_url": {
+		"Privasimu address for agent.platform_url (https://..., without /api; empty = fill it in later):",
+		"Alamat Privasimu untuk agent.platform_url (https://..., tanpa /api; kosong = isi nanti):",
+	},
+	"cli.init.platform_url_empty": {
+		"agent.platform_url in %s is empty: fill in the Privasimu address (https://..., without /api) before enrolling.",
+		"agent.platform_url di %s kosong: isi alamat Privasimu (https://..., tanpa /api) sebelum mendaftar.",
+	},
+	"cli.init.next_b": {
+		"Next steps (mode B, no API key or certificate needed):\n  1. Add your sources or file roots to %s and store each password with \"privasimu-bridge secret set <name>\".\n  2. In Privasimu (Data Discovery, bridge agents) create an agent, copy its enrollment token and run \"privasimu-bridge agent enroll --token <token>\".\n  3. Run \"privasimu-bridge check\", then \"privasimu-bridge service install --mode agent\" (Docker: docker compose up -d agent).",
+		"Langkah berikutnya (mode B, tanpa kunci API atau sertifikat):\n  1. Tambahkan sumber atau root berkas ke %s dan simpan setiap password dengan \"privasimu-bridge secret set <nama>\".\n  2. Di Privasimu (Data Discovery, agen bridge) buat agen, salin token pendaftarannya, lalu jalankan \"privasimu-bridge agent enroll --token <token>\".\n  3. Jalankan \"privasimu-bridge check\", lalu \"privasimu-bridge service install --mode agent\" (Docker: docker compose up -d agent).",
+	},
+	"cli.init.not_writable": {
+		"%s cannot be written (%s): run init as an administrator, or in Docker give the configuration folder and the state volume to the user 65532 (install guide, section 1, Docker).",
+		"%s tidak dapat ditulis (%s): jalankan init sebagai administrator, atau di Docker serahkan folder konfigurasi dan volume state ke pengguna 65532 (panduan pemasangan, bagian 1, Docker).",
+	},
 	"cli.init.exists":   {"%s already exists; use --force to write a new one (the secret store key is kept).", "%s sudah ada; pakai --force untuk menulis yang baru (kunci penyimpanan rahasia tetap dipakai)."},
 	"cli.init.created":  {"Created %s", "Dibuat %s"},
 	"cli.init.kept_key": {"Kept the existing secret store key %s", "Kunci penyimpanan rahasia yang ada tetap dipakai: %s"},
@@ -188,11 +209,52 @@ var catalog = map[string][2]string{
 	"cli.check.agent_config":       {"mode B: %s", "mode B: %s"},
 	"cli.check.not_enrolled":       {"mode B: not enrolled yet (privasimu-bridge agent enroll)", "mode B: belum terdaftar (privasimu-bridge agent enroll)"},
 	"cli.check.enrolled":           {"mode B: enrolled as agent %s", "mode B: terdaftar sebagai agen %s"},
-	"cli.check.platform_proxy":     {"mode B: the platform is reached through the proxy %s (not tested)", "mode B: platform dijangkau lewat proxy %s (tidak diuji)"},
-	"cli.check.platform_failed":    {"mode B: TLS connection to %s failed: %s", "mode B: koneksi TLS ke %s gagal: %s"},
-	"cli.check.platform_ok":        {"mode B: TLS connection to %s verified", "mode B: koneksi TLS ke %s terverifikasi"},
-	"cli.check.failed":             {"%d check(s) failed", "%d pemeriksaan gagal"},
-	"cli.check.done":               {"All checks passed (%d warnings).", "Semua pemeriksaan lolos (%d peringatan)."},
+	"cli.check.platform_failed":    {"mode B: the connection to %s failed: %s", "mode B: koneksi ke %s gagal: %s"},
+	"cli.check.platform_ok":        {"mode B: the bridge agent API answers at %s (TLS verified)", "mode B: API agen bridge menjawab di %s (TLS terverifikasi)"},
+	"cli.check.platform_protocol":  {"mode B: %s does not support this bridge's agent protocol; update Privasimu or the bridge", "mode B: %s tidak mendukung protokol agen bridge ini; perbarui Privasimu atau bridge"},
+	"cli.check.platform_basic_auth": {
+		"mode B: a web server in front of Privasimu at %s asks for HTTP Basic Auth (realm %q). The agent sends its own token in the Authorization header, so it cannot also send a Basic Auth password: exempt /api/bridge-agent/ from Basic Auth on that web server (install guide, section 12), or use an address without it",
+		"mode B: web server di depan Privasimu di %s meminta HTTP Basic Auth (realm %q). Agen mengirim tokennya sendiri di header Authorization, sehingga tidak dapat sekaligus mengirim password Basic Auth: kecualikan /api/bridge-agent/ dari Basic Auth di web server itu (panduan pemasangan, bagian 12), atau pakai alamat tanpa Basic Auth",
+	},
+	"cli.check.platform_redirect": {
+		"mode B: %s answered %d with a redirect to %s; the agent never follows redirects: set agent.platform_url to the final https address",
+		"mode B: %s menjawab %d dengan pengalihan ke %s; agen tidak pernah mengikuti pengalihan: isi agent.platform_url dengan alamat https tujuan akhirnya",
+	},
+	"cli.check.platform_not_found": {
+		"mode B: no bridge agent API at %s: agent.platform_url must be the address of the Privasimu backend without /api, and that Privasimu version must support bridge agents",
+		"mode B: tidak ada API agen bridge di %s: agent.platform_url harus alamat backend Privasimu tanpa /api, dan versi Privasimu itu harus mendukung agen bridge",
+	},
+	"cli.check.platform_refused": {
+		"mode B: something in front of Privasimu refused %s with %d (not the agent API): let /api/bridge-agent/ through that proxy, firewall or access control",
+		"mode B: sesuatu di depan Privasimu menolak %s dengan %d (bukan API agen): loloskan /api/bridge-agent/ di proxy, firewall, atau kontrol akses itu",
+	},
+	"cli.check.platform_unexpected": {
+		"mode B: %s answered %d instead of the agent API's 405; check agent.platform_url and what runs in front of Privasimu",
+		"mode B: %s menjawab %d, bukan 405 dari API agen; periksa agent.platform_url dan apa yang berjalan di depan Privasimu",
+	},
+	"cli.check.platform_tls_name": {
+		"mode B: the TLS certificate of %s is not valid for that name (it is valid for: %s): use one of those names in agent.platform_url, or get a certificate for this one",
+		"mode B: sertifikat TLS %s tidak berlaku untuk nama itu (berlaku untuk: %s): pakai salah satu nama itu di agent.platform_url, atau buat sertifikat untuk nama ini",
+	},
+	"cli.check.platform_tls_ca": {
+		"mode B: the TLS certificate of %s is signed by an authority this server does not trust (issuer: %s): when Privasimu uses an internal or private CA, put that CA's PEM file in agent.ca_file",
+		"mode B: sertifikat TLS %s ditandatangani otoritas yang tidak dipercaya server ini (penerbit: %s): bila Privasimu memakai CA internal atau privat, isi agent.ca_file dengan berkas PEM CA itu",
+	},
+	"cli.check.platform_tls_ca_file": {
+		"mode B: the TLS certificate of %s is signed by an authority that neither this server nor agent.ca_file trusts (issuer: %s, ca_file: %s): put the CA that issued it, with its intermediates, in that file",
+		"mode B: sertifikat TLS %s ditandatangani otoritas yang tidak dipercaya server ini maupun agent.ca_file (penerbit: %s, ca_file: %s): masukkan CA penerbitnya, beserta CA perantaranya, ke berkas itu",
+	},
+	"cli.check.platform_tls_expired": {
+		"mode B: the TLS certificate of %s is not valid now (valid from %s to %s): check this server's clock, or renew the certificate",
+		"mode B: sertifikat TLS %s tidak berlaku sekarang (berlaku dari %s sampai %s): periksa jam server ini, atau perbarui sertifikatnya",
+	},
+	"cli.check.platform_not_tls":      {"mode B: %s does not speak TLS on that port: agent.platform_url must be the https address of a TLS listener", "mode B: %s tidak berbicara TLS di port itu: agent.platform_url harus alamat https dari listener TLS"},
+	"cli.check.platform_dns":          {"mode B: the name %s does not resolve on this server (DNS)", "mode B: nama %s tidak dapat di-resolve di server ini (DNS)"},
+	"cli.check.platform_proxy_failed": {"mode B: the proxy %s failed: %s (check agent.proxy_url and agent.proxy_auth)", "mode B: proxy %s gagal: %s (periksa agent.proxy_url dan agent.proxy_auth)"},
+	"cli.check.ca_file_unreadable":    {"mode B: agent.ca_file %s cannot be read: %s", "mode B: agent.ca_file %s tidak dapat dibaca: %s"},
+	"cli.check.ca_file_empty":         {"mode B: agent.ca_file %s holds no PEM certificate", "mode B: agent.ca_file %s tidak berisi sertifikat PEM"},
+	"cli.check.failed":                {"%d check(s) failed", "%d pemeriksaan gagal"},
+	"cli.check.done":                  {"All checks passed (%d warnings).", "Semua pemeriksaan lolos (%d peringatan)."},
 
 	"cli.serve.usage":        {"Usage: privasimu-bridge serve [--service-name NAME]", "Pemakaian: privasimu-bridge serve [--service-name NAMA]"},
 	"cli.agent.usage":        {"Usage: privasimu-bridge agent [--service-name NAME] | agent enroll [--token TOKEN]", "Pemakaian: privasimu-bridge agent [--service-name NAMA] | agent enroll [--token TOKEN]"},
@@ -200,8 +262,12 @@ var catalog = map[string][2]string{
 	"cli.enroll.usage":       {"Usage: privasimu-bridge agent enroll [--token TOKEN] (or PRIVASIMU_BRIDGE_ENROLL_TOKEN, or standard input)", "Pemakaian: privasimu-bridge agent enroll [--token TOKEN] (atau PRIVASIMU_BRIDGE_ENROLL_TOKEN, atau masukan standar)"},
 	"cli.enroll.prompt":      {"Enrollment token from Privasimu:", "Token pendaftaran dari Privasimu:"},
 	"cli.enroll.no_token":    {"No enrollment token given.", "Token pendaftaran tidak diberikan."},
-	"cli.enroll.failed":      {"Enrollment failed: %s", "Pendaftaran gagal: %s"},
-	"cli.enroll.done":        {"Enrolled as agent %s for %s. Start it with \"privasimu-bridge agent\" or install the service.", "Terdaftar sebagai agen %s untuk %s. Jalankan dengan \"privasimu-bridge agent\" atau pasang layanannya."},
+	"cli.enroll.failed":      {"Enrollment failed: %s (privasimu-bridge check names the cause of a connection problem)", "Pendaftaran gagal: %s (privasimu-bridge check menyebutkan penyebab masalah koneksi)"},
+	"cli.enroll.basic_auth": {
+		"Enrollment failed: a web server in front of Privasimu asks for HTTP Basic Auth, which the agent cannot send (its token uses the same header). Exempt /api/bridge-agent/ from Basic Auth there (install guide, section 12).",
+		"Pendaftaran gagal: web server di depan Privasimu meminta HTTP Basic Auth, yang tidak dapat dikirim agen (tokennya memakai header yang sama). Kecualikan /api/bridge-agent/ dari Basic Auth di sana (panduan pemasangan, bagian 12).",
+	},
+	"cli.enroll.done": {"Enrolled as agent %s for %s. Start it with \"privasimu-bridge agent\" or install the service.", "Terdaftar sebagai agen %s untuk %s. Jalankan dengan \"privasimu-bridge agent\" atau pasang layanannya."},
 
 	"cli.key.usage":        {"Usage: privasimu-bridge key create [--expires YYYY-MM-DD] | key list | key revoke ID", "Pemakaian: privasimu-bridge key create [--expires YYYY-MM-DD] | key list | key revoke ID"},
 	"cli.key.created":      {"Created API key %s. The key (shown only now):", "Kunci API %s dibuat. Kuncinya (hanya ditampilkan sekarang):"},

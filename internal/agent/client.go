@@ -34,6 +34,17 @@ type APIError struct {
 	RetryAfter time.Duration
 }
 
+// ErrHTTPBasicAuth is the code of a 401 that a web server in front of the platform answered
+// with WWW-Authenticate: Basic, not the platform itself. The agent cannot pass such a check:
+// its own token travels in the same Authorization header. It is no platform error code.
+const ErrHTTPBasicAuth = "http_basic_auth"
+
+// basicAuthChallenge reports whether a WWW-Authenticate header asks for HTTP Basic.
+func basicAuthChallenge(h string) bool {
+	h = strings.TrimSpace(h)
+	return len(h) >= 5 && strings.EqualFold(h[:5], "basic")
+}
+
 func (e *APIError) Error() string { return fmt.Sprintf("platform answered %d %s", e.Status, e.Code) }
 
 // Retryable reports whether the same request may be sent again later.
@@ -176,6 +187,9 @@ func (c *Client) do(ctx context.Context, method, path string, headers map[string
 		if json.Unmarshal(data, &eb) == nil {
 			ae.Code = eb.Error.Code
 		}
+		if ae.Code == "" && resp.StatusCode == http.StatusUnauthorized && basicAuthChallenge(resp.Header.Get("WWW-Authenticate")) {
+			ae.Code = ErrHTTPBasicAuth
+		}
 		if ae.Code == "" {
 			ae.Code = defaultCode(resp.StatusCode)
 		}
@@ -238,6 +252,72 @@ func (c *Client) Rotate(ctx context.Context) (RotateResponse, error) {
 		err = &APIError{Status: 200, Code: "invalid_response"}
 	}
 	return resp, err
+}
+
+// ProbeResult is what the platform address answered to an unauthenticated GET of the poll
+// route. Both platform lines answer 405 method_not_allowed there (protocol section 4, step
+// 1), before any authentication and without side effects; anything else comes from
+// something in front of the platform or from a wrong address.
+type ProbeResult struct {
+	URL    string
+	Status int
+	// Code is the error code of a protocol envelope, "" when the body is not one.
+	Code string
+	// Protocol is the X-Bridge-Protocol header every platform answer carries.
+	Protocol string
+	// BasicAuth is true for a 401 with WWW-Authenticate: Basic; Realm is its realm.
+	BasicAuth bool
+	Realm     string
+	// Location is the target of a redirect (the agent never follows one).
+	Location string
+}
+
+// FromPlatform reports whether the agent API itself answered.
+func (r ProbeResult) FromPlatform() bool {
+	return r.Protocol == strconv.Itoa(ProtocolVersion) || r.Code != ""
+}
+
+// Probe sends the unauthenticated GET of ProbeResult through the agent's own transport
+// (trusted CAs, proxy, no redirects), so it meets what the agent meets.
+func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
+	r := ProbeResult{URL: c.base + PathPoll}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
+	if err != nil {
+		return r, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
+	req.Header.Set("X-Bridge-Protocol", strconv.Itoa(ProtocolVersion))
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return r, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	r.Status, r.Protocol, r.Location = resp.StatusCode, resp.Header.Get("X-Bridge-Protocol"), resp.Header.Get("Location")
+	var eb ErrorBody
+	if json.Unmarshal(data, &eb) == nil {
+		r.Code = eb.Error.Code
+	}
+	if h := resp.Header.Get("WWW-Authenticate"); resp.StatusCode == http.StatusUnauthorized && basicAuthChallenge(h) {
+		r.BasicAuth = true
+		if _, after, ok := strings.Cut(h, "realm="); ok {
+			r.Realm = printable(strings.Trim(strings.SplitN(after, ",", 2)[0], `" `), 64)
+		}
+	}
+	return r, nil
+}
+
+// printable keeps at most n printable ASCII characters of s (text from another server that
+// is shown to the operator).
+func printable(s string, n int) string {
+	b := make([]byte, 0, min(len(s), n))
+	for i := 0; i < len(s) && len(b) < n; i++ {
+		if c := s[i]; c >= 0x20 && c <= 0x7e {
+			b = append(b, c)
+		}
+	}
+	return string(b)
 }
 
 func jobPath(id, action string) string { return pathJobs + url.PathEscape(id) + "/" + action }

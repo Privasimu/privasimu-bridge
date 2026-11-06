@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -282,6 +283,12 @@ func (c *checker) checkServer(cfg *config.Config) {
 	}
 }
 
+// checkAgent checks mode B: the settings, the enrollment, and the way to the platform. The
+// last one is an unauthenticated GET of the poll route through the agent's own client
+// (trusted CAs with agent.ca_file, the proxy, no redirects): both platform lines answer it
+// with 405 and their protocol header, without side effects. Anything else is named: a TLS
+// problem (unknown CA, wrong host name, expiry), HTTP Basic Auth or another refusal in front
+// of the platform, a redirect, or an address without the agent API.
 func (c *checker) checkAgent(ctx context.Context, cfg *config.Config) {
 	if err := cfg.ValidateAgent(); err != nil {
 		c.fail("cli.check.agent_config", err.Error())
@@ -293,32 +300,91 @@ func (c *checker) checkAgent(ctx context.Context, cfg *config.Config) {
 	} else {
 		c.ok("cli.check.enrolled", st.AgentID)
 	}
-	u, _ := url.Parse(cfg.Agent.PlatformURL)
-	host := u.Host
-	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), "443")
-	}
-	if cfg.Agent.ProxyURL != "" {
-		c.ok("cli.check.platform_proxy", cfg.Agent.ProxyURL)
+	if cfg.Agent.CAFile != "" && !c.caFileUsable(cfg.Resolve(cfg.Agent.CAFile)) {
 		return
 	}
-	pool, _ := x509.SystemCertPool()
-	if pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if cfg.Agent.CAFile != "" {
-		if pem, err := os.ReadFile(cfg.Resolve(cfg.Agent.CAFile)); err == nil {
-			pool.AppendCertsFromPEM(pem)
-		}
-	}
-	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}, Config: &tls.Config{RootCAs: pool, ServerName: u.Hostname(), MinVersion: tls.VersionTLS12}}
-	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	conn, err := d.DialContext(dctx, "tcp", host)
+	client, err := c.a.platformClient(cfg)
 	if err != nil {
-		c.fail("cli.check.platform_failed", host, err.Error())
+		c.fail("cli.check.agent_config", err.Error())
 		return
 	}
-	_ = conn.Close()
-	c.ok("cli.check.platform_ok", host)
+	u, _ := url.Parse(cfg.Agent.PlatformURL)
+	host := u.Hostname()
+	pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := client.Probe(pctx)
+	if err != nil {
+		c.platformError(cfg, host, err)
+		return
+	}
+	switch {
+	case res.FromPlatform() && res.Code == agent.ErrProtocolUnsupported:
+		c.fail("cli.check.platform_protocol", host)
+	case res.FromPlatform():
+		c.ok("cli.check.platform_ok", res.URL)
+	case res.BasicAuth:
+		c.fail("cli.check.platform_basic_auth", host, res.Realm)
+	case res.Status >= 300 && res.Status < 400:
+		c.fail("cli.check.platform_redirect", res.URL, res.Status, res.Location)
+	case res.Status == http.StatusNotFound:
+		c.fail("cli.check.platform_not_found", res.URL)
+	case res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden:
+		c.fail("cli.check.platform_refused", res.URL, res.Status)
+	default:
+		c.warn("cli.check.platform_unexpected", res.URL, res.Status)
+	}
+}
+
+// caFileUsable checks agent.ca_file: readable and holding at least one PEM certificate.
+func (c *checker) caFileUsable(path string) bool {
+	pem, err := os.ReadFile(path) // #nosec G304 -- the operator's configured CA file
+	if err != nil {
+		c.fail("cli.check.ca_file_unreadable", path, err.Error())
+		return false
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM(pem) {
+		c.fail("cli.check.ca_file_empty", path)
+		return false
+	}
+	return true
+}
+
+// platformError names why the platform could not be reached.
+func (c *checker) platformError(cfg *config.Config, host string, err error) {
+	var hostErr x509.HostnameError
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var record tls.RecordHeaderError
+	var dnsErr *net.DNSError
+	switch {
+	case errors.As(err, &hostErr):
+		names := []string{}
+		if crt := hostErr.Certificate; crt != nil {
+			names = append(names, crt.DNSNames...)
+			for _, ip := range crt.IPAddresses {
+				names = append(names, ip.String())
+			}
+		}
+		c.fail("cli.check.platform_tls_name", host, strings.Join(names, ", "))
+	case errors.As(err, &unknown):
+		issuer := "?"
+		if unknown.Cert != nil {
+			issuer = unknown.Cert.Issuer.String()
+		}
+		if cfg.Agent.CAFile == "" {
+			c.fail("cli.check.platform_tls_ca", host, issuer)
+		} else {
+			c.fail("cli.check.platform_tls_ca_file", host, issuer, cfg.Agent.CAFile)
+		}
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		c.fail("cli.check.platform_tls_expired", host, invalid.Cert.NotBefore.Format("2006-01-02"), invalid.Cert.NotAfter.Format("2006-01-02"))
+	case errors.As(err, &record):
+		c.fail("cli.check.platform_not_tls", host)
+	case errors.As(err, &dnsErr):
+		c.fail("cli.check.platform_dns", host)
+	case cfg.Agent.ProxyURL != "" && strings.Contains(err.Error(), "proxyconnect"):
+		c.fail("cli.check.platform_proxy_failed", cfg.Agent.ProxyURL, err.Error())
+	default:
+		c.fail("cli.check.platform_failed", host, err.Error())
+	}
 }
