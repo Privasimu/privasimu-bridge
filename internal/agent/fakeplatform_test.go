@@ -632,9 +632,20 @@ func validJobBody(action string, m map[string]any) bool {
 		return integer(m["parts"], 0, 500) && isObject
 	case "fail":
 		_, isBool := m["retryable"].(bool)
+		// table (revision 5, proposal): optional, the name rule of a tables part item.
+		if v, has := m["table"]; has && !tableName(v) {
+			return false
+		}
 		return word(m["error_kind"], reWord) && word(m["error_code"], reErrorCode) && isBool && word(m["stage"], reWord)
 	}
 	return false
+}
+
+// tableName is the name rule of section 6.4: 1 to 255 bytes of valid UTF-8 without a C0
+// control character or DEL.
+func tableName(v any) bool {
+	s, ok := v.(string)
+	return ok && len(s) >= 1 && len(s) <= 255 && text(s, 1, 255)
 }
 
 // partKinds is the part kind of each job type (section 5.5).
