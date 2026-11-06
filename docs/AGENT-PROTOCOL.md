@@ -1,8 +1,8 @@
 # Agent protocol 1 (mode B): platform contract
 
 Status: **normative, revision 3 (2 November 2026)**; revision 4 (further database engines)
-and revision 5 (job deadlines, where a job stopped, progress semantics; 6 November 2026) are
-**proposals** the agent already follows (section 13). The agent side is implemented and
+and revision 5 (job deadlines, where a job stopped, progress semantics, schemas per source;
+6 November 2026) are **proposals** the agent already follows (section 13). The agent side is implemented and
 tested in this repository (`internal/agent`, against an in-memory platform that follows
 this document, `internal/agent/fakeplatform_test.go`). Both Privasimu Nexus lines implement
 the platform side (branch `feat/bridge-agent-mode-b-2026-10-31` in each backend); revision 2
@@ -322,6 +322,31 @@ The bridge sends the id as the label when its configuration has none, and its
 configuration check refuses more than 200 sources and file roots together, so an
 inventory it sends is always accepted.
 
+**Schemas per source (revision 5, proposal; contract P-4).** A `database` entry may carry
+`schemas` after `capabilities`: the schema names the source's account can see, so that the
+platform can offer a choice per source (job option `schemas`, section 6.2).
+```json
+{"id":"ora-free","kind":"database","engine":"oracle","label":"Oracle FREEPDB1","capabilities":["sampling"],"schemas":["HR","SALES"]}
+```
+- The names, sorted by byte and unique: for Oracle the owners of at least one table the
+  account can read, without Oracle-maintained accounts; PostgreSQL and Redshift the schemas
+  with `USAGE`; MySQL and MariaDB the databases; SQL Server the user schemas. Narrowed by
+  the source's local `schemas` allow-list (compared without case, in the database's
+  spelling); before the database was read, a source with an allow-list offers the
+  allow-list itself.
+- Absent: no list is known (MongoDB, ClickHouse and the cloud warehouses report none yet,
+  or the database was not read): the platform offers no choice. `[]`: read, and the
+  account sees no schema.
+- Rule: at most 200 names of 1 to 128 characters each (the *label* rule), and at most
+  32 768 bytes of names in the whole inventory. The agent cuts a list to fit, in inventory
+  order, and then adds the capability `schemas_partial` to the entry. A platform that reads
+  the key refuses anything else with `400 invalid_request`; on an entry of another kind it
+  ignores the key.
+- The agent reads the lists in the background when it starts (one source at a time), and
+  again after every successful `test_source` and `scan_database` of a source; it keeps them
+  in its state directory between restarts. A changed list changes the digest, so the next
+  poll answer asks for the inventory.
+
 The digest is computed by the agent (SHA-256 of its JSON inventory) over exactly the
 entries it sends; the platform stores it and never recomputes it. When packages entries
 start (or stop) being sent, the digest changes, so the platform also asks for the
@@ -471,14 +496,26 @@ is revoked while it holds jobs.
 | `type` | `source_id` names | Options the platform may set |
 |---|---|---|
 | `test_source` | a database source or a file root | none |
-| `scan_database` | a database source | `schema`, `max_tables` (≤ 500), `max_columns` (≤ 1000), `sampling` (only `false` has an effect), `deadline_seconds` |
+| `scan_database` | a database source | `schema`, `schemas` (revision 5), `max_tables` (≤ 500), `max_columns` (≤ 1000), `sampling` (only `false` has an effect), `deadline_seconds` |
 | `scan_files` | a file root | `refresh`, `max_age_seconds`, `deadline_seconds` |
 | `scan_packages` (revision 3) | a packages target | `refresh`, `max_age_seconds`, `deadline_seconds` (≤ 3600), `match` |
 
-`options` lists only the keys that were set, in this order: `schema`, `max_tables`,
-`max_columns`, `sampling`, `deadline_seconds`, `refresh`, `max_age_seconds`, `match`; `{}`
-when none. Options can only narrow what the agent's local configuration allows: the
-platform can lower limits, narrow to an allowed schema or switch sampling off, never on.
+`options` lists only the keys that were set, in this order: `schema`, `schemas`,
+`max_tables`, `max_columns`, `sampling`, `deadline_seconds`, `refresh`, `max_age_seconds`,
+`match`; `{}` when none. Options can only narrow what the agent's local configuration
+allows: the platform can lower limits, narrow to allowed schemas or switch sampling off,
+never on.
+
+`schemas` (revision 5, proposal; contract P-4): a list of 1 to 100 names (each 1 to 128
+characters, the *label* rule) chosen from the source's inventory `schemas` (section 5.3).
+The platform sends it when the system's `connection_config.bridge_schemas` is a non-empty
+array and the linked source reports `schemas` (an agent that reports them understands the
+option); it never sends `schema` together with it. The agent scans exactly those schemas;
+table names stay as without options (bare in the connection's default schema,
+`schema.table` otherwise). A name outside the source's local allow-list, a name outside
+the rule, or the option for an engine without schemas (MongoDB) fails the job with
+`error_kind` `config`, `error_code` `invalid_options`, stage `accept`; a name the database
+no longer has yields no tables. An agent of an earlier revision ignores the option.
 
 `scan_packages` options: `refresh` (bool) scans now; otherwise the agent answers with its
 stored report of the target when it is younger than `max_age_seconds` (default 24 hours),
@@ -835,7 +872,9 @@ unknown).
 `Source` = `{"id","kind","engine","label","description","capabilities","reported_at"}`.
 **`id` is the agent's inventory id** (`bridge_agent_sources.source_key`), the exact value a
 system stores in `connection_config.bridge_source_key`; it is never the row UUID, and there
-is no separate `source_key` key. `description` is `null` when absent or empty.
+is no separate `source_key` key. `description` is `null` when absent or empty. Revision 5
+(contract P-4) adds `"schemas"` (the inventory's list, or `null`) right after
+`"capabilities"`: `{"id","kind","engine","label","description","capabilities","schemas","reported_at"}`.
 
 `Job` = `{"id","type","status","source_id","information_system_id","attempt","progress","stage","error_kind","error_code","error","created_at","leased_at","finished_at"}`
 (`error` = the text of section 6.6 for `error_code`, else `null`). Reading or cancelling a
@@ -901,7 +940,16 @@ non-empty string, or when its type is `file_share`. For them:
   `bridge_agent_id` + `bridge_source_key` of a `files` source. It is not the retired
   `file` type and has no path field.
 - `mongodb` becomes scannable through an agent (no platform-side driver).
-- A manual `scan_files` job gets `options` `{"refresh":true}`; every other job `{}`.
+- A manual `scan_files` job gets `options` `{"refresh":true}`; every other job `{}`, except
+  for the schema choice of revision 5 below.
+- **Schemas per source (revision 5, contract P-4).** An agent-linked database system may
+  store `connection_config.bridge_schemas`: an array of names from its source's `schemas`
+  (absent, `null` or `[]` = every schema the agent allows). On create, and on an update that
+  changes the type, the link or the list, anything else answers
+  `422 {"message":"Skema yang dipilih tidak ada di daftar skema sumber agen bridge.","code":"BRIDGE_SCHEMA_NOT_ON_SOURCE","errors":{"connection_config.bridge_schemas":["Skema yang dipilih tidak ada di daftar skema sumber agen bridge."]}}`
+  (1 to 100 names, each in the source's current `schemas`, which must not be `null`). A
+  `scan_database` job of such a system gets `options.schemas` = that list when it is
+  non-empty and the source reports `schemas` when the job is queued.
 
 ## 9. Data model (both lines, identical names)
 
@@ -1018,7 +1066,14 @@ Since revision 5 (proposal) also:
 - a `fail` with and without `table` is accepted, and `table` is stored and shown with the
   failure; a `table` outside the name rule of section 6.4 is `400 invalid_request`;
 - renewals that repeat the previous four progress values do not count as advancement for a
-  stall check, and any change of one of them does.
+  stall check, and any change of one of them does;
+- an inventory entry with `schemas` (absent, `null`, `[]`, 200 names, names of 128
+  characters) is accepted and returned as `Source.schemas`; 201 names, a name of 129
+  characters or with a control character, a non-list, or more than 32 768 bytes of names in
+  one inventory is `400`; the key is ignored on a `files` or `packages` entry;
+- `connection_config.bridge_schemas` outside the source's `schemas` is
+  `422 BRIDGE_SCHEMA_NOT_ON_SOURCE`, and a non-empty list reaches the job as
+  `options.schemas`, after `schema` in the options order.
 
 The agent in this repository runs the same flows against an in-memory platform
 (`internal/agent/fakeplatform_test.go`) that follows this document, including the field
@@ -1141,6 +1196,12 @@ and followed by a digit, as in `2+2` or `Lantai(2)`), fixed in the agent. Additi
    advancement, `progress` never decreases, and a stall check compares all four values.
 3. *Deadlines and the watchdog* (section 6.8): every job type has a deadline; work that
    ignores it is abandoned 60 seconds later, reported (`retryable` false) and its slot freed.
+4. *Schemas per source* (contract P-4; sections 5.3, 6.2 and 8): a `database` inventory
+   entry carries `schemas` (the names its account can see, within 200 names and 32 768
+   bytes per inventory, `schemas_partial` when cut), the tenant `Source` returns them, a
+   system stores its choice in `connection_config.bridge_schemas`, and a `scan_database`
+   job carries it as the option `schemas`. Reported case: an Oracle `FREEPDB1` source whose
+   account owns no table, while the data lives in other schemas (owners).
 
 **Open items** (not normative yet):
 

@@ -363,7 +363,10 @@ BEGIN
 END;
 /
 ```
-Set `schemas: [FIN]` on the source (an Oracle schema is the owner).
+Set `schemas: [FIN]` on the source (an Oracle schema is the owner). Without it a scan
+covers the account's own schema only, which is empty for an account like this one. In mode
+B, Privasimu offers the owners whose tables the account can read, per source, and you
+choose there which to scan; `schemas:` then limits what can be chosen (section 11).
 
 **MongoDB**
 ```js
@@ -779,6 +782,13 @@ The agent opens no port; allow outbound HTTPS to Privasimu only.
   table, a file, a part of the result). While one step takes time, the agent renews its
   lease every 40 seconds with the same values; a value that stays the same for many minutes
   means one slow step, and a Privasimu version that detects stalls fails such a job.
+- **Schemas per source**: for PostgreSQL, MySQL/MariaDB, SQL Server, Oracle and Redshift
+  sources the agent tells Privasimu which schemas the account can read (Oracle: the owners
+  of the tables it can read; names only). It reads them when it starts and after each
+  connection test or scan of the source, so **Test Connection** in Privasimu also refreshes
+  the list. In Privasimu you choose per system which of them to scan; without a choice
+  every schema the configuration allows is scanned. `schemas:` on a source limits both
+  the list and the choice.
 - **Token rotation**: after an admin rotates the token in Privasimu, the agent takes a new
   token on its next poll and keeps it in the encrypted store. If the answer is lost on the
   way, Privasimu asks again on the next poll and the agent rotates again; its old token

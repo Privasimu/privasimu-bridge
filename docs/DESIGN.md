@@ -315,6 +315,20 @@ renewals carry the progress as it is: the values change only when a stage, a tab
 or a result part advances, so a renewal without advancement is a heartbeat, and the
 percentage never goes back (AGENT-PROTOCOL.md sections 5.4 and 6.8).
 
+**Schemas per source (revision 5, proposal; contract P-4).** A bridge account often owns no
+table itself: in Oracle a schema is its owner, and the account reads other owners' tables
+through grants, so a scan of its own schema finds nothing (the reported case: Oracle
+`FREEPDB1`). The agent reads, per database source, the schema names its account can see
+(Oracle the owners of readable tables without Oracle-maintained accounts, PostgreSQL and
+Redshift the schemas with `USAGE`, MySQL and MariaDB the databases, SQL Server the user
+schemas), narrows them by the local allow-list and reports them in its inventory
+(`schemas`, within the platforms' limits of 200 names and 32 KiB per inventory;
+`schemas_partial` when cut). It reads them in the background when it starts and after each
+successful test or scan, and keeps them in `state/agent-schemas.json`. The platform offers
+them per source, stores the choice with the system and sends it as the job option
+`schemas`; the scan covers exactly those schemas, each of which must be allowed locally.
+ClickHouse and the cloud warehouses report no list yet.
+
 **Package scans (revision 3, security posture per RoPA).** The opt-in job `scan_packages`
 (`internal/packages`) lists the software of an allow-listed target (an installed host, a
 directory, or a local OCI or docker image archive) with Syft and matches it with Grype or
@@ -339,7 +353,7 @@ and scans nothing for it. An Athena source never announces `sampling` (catalog o
 
 | Leaves the network | Never leaves |
 |---|---|
-| table, collection and column names; data types; nullability; row estimates (mode B) | row values, samples, documents |
+| table, collection and column names; data types; nullability; row estimates (mode B); the schema names a source's account can see (mode B; for Oracle the owners, which also prefix the table names of a scan), narrowed by the local allow-list | row values, samples, documents |
 | package names, versions, ecosystems, licences, vulnerability ids, CVSS, fixed versions, OS id and version (`scan_packages`) | file paths, file names, package locations, the SBOM, scanner output and errors |
 | PII category codes, UU PDP category (`umum` / `spesifik`), confidence, detection source | the matched values or any part of them |
 | counts: sampled values, matching values, per-category counts per file | file content, extracted text |

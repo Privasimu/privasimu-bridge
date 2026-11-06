@@ -362,6 +362,7 @@ func TestJobsTheAgentRefuses(t *testing.T) {
 	}
 	a := e.agent()
 	a.cfg.Agent.MaxParallelJobs = 3
+	a.discover = nil // reading the schema lists at the start opens the database too
 	if !e.run(a, 10*time.Second, func() bool {
 		return e.finished("j-type")() && e.finished("j-allowed")() && e.finished("j-source")()
 	}) {

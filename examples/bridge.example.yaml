@@ -111,6 +111,9 @@ sources:
     username: privasimu_ro          # a read-only account (see the install guide)
     password: "secret:corebank_pg"
     schemas: [public, cif]          # optional allow-list; empty = every non-system schema
+                                    # (MySQL/MariaDB: the source's database; Oracle: the
+                                    # account's own). In mode B it also limits the schemas
+                                    # Privasimu offers for this source.
     tls:
       mode: verify-full             # disable | prefer | require | verify-ca | verify-full
       ca_file: tls/db-ca.pem

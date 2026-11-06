@@ -592,6 +592,7 @@ func validInventory(m map[string]any, features []string) bool {
 		return false
 	}
 	seen := map[string]bool{}
+	schemaBytes := 0
 	for _, e := range sources {
 		s, isObject := e.(map[string]any)
 		if !isObject {
@@ -613,8 +614,19 @@ func validInventory(m map[string]any, features []string) bool {
 		if !stringList(s["capabilities"], 16, reCapability.MatchString) {
 			return false
 		}
+		// schemas (revision 5, contract P4-L1): on a database entry, absent or null, or at
+		// most 200 names of the label rule (1 to 128 characters); at most 32 768 bytes of
+		// names in the whole inventory. Other kinds ignore the key.
+		if v := s["schemas"]; v != nil && kind == "database" {
+			if !stringList(v, 200, func(n string) bool { return text(n, 1, 128) }) {
+				return false
+			}
+			for _, n := range v.([]any) {
+				schemaBytes += len(n.(string))
+			}
+		}
 	}
-	return true
+	return schemaBytes <= 32768
 }
 
 // validJobBody checks the body of a job route (sections 5.4 to 5.7).
