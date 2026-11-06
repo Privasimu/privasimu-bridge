@@ -39,6 +39,9 @@ type DB struct {
 	// Stuck makes the given operation ("open", "list", "columns", "sample") block until its
 	// channel is closed, ignoring the context: a driver call that never returns.
 	Stuck map[string]chan struct{}
+	// SchemaList is what ListSchemas answers; nil means the schemas of the tables. Fail
+	// "schemas" makes it fail.
+	SchemaList []string
 
 	mu      sync.Mutex
 	Opened  []dbsource.Target // every target Open was called with
@@ -233,6 +236,42 @@ func (c *conn) Sample(ctx context.Context, t dbsource.Table, cols []dbsource.Col
 		}
 	}
 	return nil
+}
+
+// ListSchemas answers DB.SchemaList, or the schemas of the tables, sorted (MongoDB has
+// none). Like the real engines it ignores the target's allow-list.
+func (c *conn) ListSchemas(ctx context.Context) ([]string, error) {
+	if err := c.wait(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.db.Fail["schemas"]; err != nil {
+		return nil, err
+	}
+	if c.Engine() == "mongodb" {
+		return nil, dbsource.ErrSchemasUnsupported
+	}
+	c.db.mu.Lock()
+	list := c.db.SchemaList
+	c.db.mu.Unlock()
+	if list == nil {
+		seen := map[string]bool{}
+		for _, t := range c.db.Tables {
+			if !seen[t.Schema] {
+				seen[t.Schema] = true
+				list = append(list, t.Schema)
+			}
+		}
+	}
+	out := append([]string{}, list...)
+	sort.Strings(out)
+	return out, nil
+}
+
+// SetSchemaList changes what ListSchemas answers while tests run.
+func (d *DB) SetSchemaList(list []string) {
+	d.mu.Lock()
+	d.SchemaList = list
+	d.mu.Unlock()
 }
 
 // Text returns a sampleable text column.

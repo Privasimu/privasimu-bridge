@@ -18,6 +18,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,49 @@ func TestEngineErrors(t *testing.T) {
 					t.Fatalf("certificate from an untrusted CA: kind %s (%v)", dbsource.KindOf(err), err)
 				}
 			}
+		})
+	}
+}
+
+// TestListSchemas (contract P-4): the schema list of a real server names the schema of the
+// fixture table and no system schema; it ignores the target's allow-list (the agent applies
+// it).
+func TestListSchemas(t *testing.T) {
+	system := map[string]bool{"pg_catalog": true, "information_schema": true, "INFORMATION_SCHEMA": true, "mysql": true,
+		"performance_schema": true, "sys": true, "SYS": true, "SYSTEM": true, "guest": true}
+	for _, engine := range []string{"postgresql", "mysql", "mariadb", "mssql", "oracle", "redshift"} {
+		t.Run(engine, func(t *testing.T) {
+			target := targetFromEnv(t, engine)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			conn, err := dbsource.Open(ctx, target)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer conn.Close()
+			sl, ok := conn.(dbsource.SchemaLister)
+			if !ok || !dbsource.ListsSchemas(engine) {
+				t.Fatalf("%s must list schemas", engine)
+			}
+			schemas, err := sl.ListSchemas(ctx)
+			if err != nil {
+				t.Fatalf("list schemas: %v", err)
+			}
+			tables, err := conn.ListTables(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tb := range tables {
+				if strings.EqualFold(tb.Name, "customers") && !slices.Contains(schemas, tb.Schema) {
+					t.Fatalf("the fixture's schema %q is not in %v", tb.Schema, schemas)
+				}
+			}
+			for _, s := range schemas {
+				if system[s] || strings.HasPrefix(s, "pg_") {
+					t.Fatalf("system schema %q listed: %v", s, schemas)
+				}
+			}
+			t.Logf("%d schemas", len(schemas))
 		})
 	}
 }
