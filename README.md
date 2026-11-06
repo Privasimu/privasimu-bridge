@@ -64,18 +64,31 @@ cosign verify --key cosign.pub privasimu-bridge:<version>-scan   # an image
 generated yet: `release-keys/` holds clearly marked placeholders until the owner publishes
 the real public keys, and the scripts refuse to sign or verify with a placeholder.
 
-## Quick start (mode A)
+## Quick start
+
+Mode B (the bridge polls Privasimu; no inbound port, no certificate):
 
 ```sh
-privasimu-bridge init --public-url https://bridge.example.co.id:8443   # prints the API key once
-privasimu-bridge secret set corebank_pg                                 # database password, no echo
+privasimu-bridge init --mode b --platform-url https://privasimu.example.co.id
+privasimu-bridge secret set corebank_pg                 # database password, no echo
+# add sources or file roots to bridge.yaml (see examples/)
+privasimu-bridge agent enroll --token pvbe_...          # token from Privasimu, bridge agents
+privasimu-bridge check                                  # also names TLS and Basic Auth problems
+privasimu-bridge service install --mode agent
+```
+
+Mode A (Privasimu calls the bridge):
+
+```sh
+privasimu-bridge init --mode a --public-url https://bridge.example.co.id:8443   # prints the API key once
+privasimu-bridge secret set corebank_pg                                         # database password, no echo
 # put the TLS certificate in tls/, add sources to bridge.yaml (see examples/)
 privasimu-bridge check
 privasimu-bridge service install --mode serve
 ```
 
-In Privasimu Data Discovery add a system of the same database type, open **Bridge
-service (optional)** and enter the bridge address and the API key. Full guides:
+In mode A, add a system of the same database type in Privasimu Data Discovery, open
+**Bridge service (optional)** and enter the bridge address and the API key. Full guides:
 
 - [docs/INSTALL.en.md](docs/INSTALL.en.md) (English)
 - [docs/INSTALL.id.md](docs/INSTALL.id.md) (Bahasa Indonesia)

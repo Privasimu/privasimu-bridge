@@ -88,26 +88,55 @@ dengan path lengkapnya pada perintah-perintah di bawah.
 
 ### Docker
 
-Lihat `deploy/docker/docker-compose.yml`. Image berjalan sebagai pengguna non-root dengan
-sistem berkas hanya-baca; pasang konfigurasi di `/etc/privasimu-bridge` dan sebuah volume
-di `/var/lib/privasimu-bridge`. Jalankan `init` sekali dengan
-`--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`.
+Lihat `deploy/docker/docker-compose.yml`. Image berjalan sebagai pengguna non-root `65532`
+dengan sistem berkas hanya-baca; pasang konfigurasi di `/etc/privasimu-bridge` dan sebuah
+volume di `/var/lib/privasimu-bridge`. Jalankan `init` sekali dengan
+`--dir /etc/privasimu-bridge --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs`
+dan `--mode b` (atau `--mode a`, bagian 2).
+
+**Kepemilikan.** Kedua folder harus milik pengguna `65532`; bila tidak, `init` berhenti
+dengan "tidak dapat ditulis":
+
+- folder konfigurasi, sebelum `init` pertama:
+  `mkdir -p config && sudo chown 65532:65532 config`;
+- volume state otomatis menjadi milik `65532` bila dibuat oleh image tanggal 6 November 2026
+  atau sesudahnya. Volume yang dibuat image lebih lama, atau bind mount, dimiliki root:
+  serahkan sekali ke `65532`. Image ini tidak punya shell, jadi image lain yang
+  mengerjakannya (`docker volume ls` menampilkan nama volume, `<folder>_bridge-state` dengan
+  berkas contoh):
+  ```sh
+  docker run --rm -v <folder>_bridge-state:/state busybox:1.37 chown -R 65532:65532 /state
+  sudo chown -R 65532:65532 ./state      # bila memakai bind mount, bukan volume
+  ```
+
 Untuk pindai paket (bagian 11.1) pakai `privasimu-bridge:<versi>-scan`, yang menambahkan
 Syft dan Grype dengan versi terkunci. Image ditandatangani dengan cosign; periksa sebelum
 menjalankannya: `cosign verify --key cosign.pub privasimu-bridge:<versi>-scan`
-(`cosign.pub` dari `release-keys/` di repositori bridge).
+(`cosign.pub` dari `release-keys/` di repositori bridge). Akun basis data untuk bridge di
+Docker dijelaskan di bagian 6 ("Bridge di Docker").
 
 Pesan program berbahasa Inggris secara bawaan; tambahkan `--lang id` (atau atur
 `PRIVASIMU_BRIDGE_LANG=id`) untuk bahasa Indonesia.
 
 ## 2. Buat konfigurasi
 
+Pilih mode (bagian 0) dengan `--mode`:
+
 ```sh
-# Linux
-sudo privasimu-bridge --lang id init --public-url https://bridge.contoh.co.id:8443
-# Windows (Administrator)
-privasimu-bridge --lang id init --public-url https://bridge.contoh.co.id:8443
+# Mode B (agen: bridge menghubungi Privasimu, tanpa port, tanpa sertifikat)
+sudo privasimu-bridge --lang id init --mode b --platform-url https://privasimu.contoh.co.id
+# Mode A (Privasimu memanggil bridge)
+sudo privasimu-bridge --lang id init --mode a --public-url https://bridge.contoh.co.id:8443
+# Windows (Administrator): sama, tanpa sudo
 ```
+
+- `--mode b` menulis bagian `agent` dengan `platform_url` (alamat backend Privasimu tanpa
+  `/api`; panduan pemasangan di Privasimu menampilkannya), tanpa bagian `server` dan tanpa
+  kunci API. Lanjutkan ke bagian 11.
+- `--mode a` menulis bagian `server` dan menampilkan kunci API pertama (di bawah), seperti
+  `init` selama ini. Lanjutkan ke bagian 3.
+- Tanpa `--mode`, `--platform-url` saja berarti mode B dan `--public-url` berarti mode A;
+  selain itu `init` bertanya di terminal, dan menulis mode A di dalam skrip.
 
 `init` membuat:
 
@@ -119,13 +148,15 @@ privasimu-bridge --lang id init --public-url https://bridge.contoh.co.id:8443
 | folder sertifikat | `/etc/privasimu-bridge/tls/` | `C:\ProgramData\PrivasimuBridge\tls\` |
 | log audit | `/var/log/privasimu-bridge/audit.jsonl` | `C:\ProgramData\PrivasimuBridge\logs\audit.jsonl` |
 
-`init` juga menampilkan **kunci API** (`pvbk_…`) **satu kali saja**. Salin sekarang ke
-pengelola kata sandi Anda: yang disimpan hanya hash-nya, kunci itu tidak dapat
-ditampilkan lagi (kunci baru dapat dibuat dengan `privasimu-bridge key create`). Di
-Windows folder ini dibatasi untuk Administrators dan SYSTEM.
+Pada mode A `init` juga menampilkan **kunci API** (`pvbk_…`) **satu kali saja**. Salin
+sekarang ke pengelola kata sandi Anda: yang disimpan hanya hash-nya, kunci itu tidak dapat
+ditampilkan lagi (kunci baru dapat dibuat dengan `privasimu-bridge key create`). Mode B
+tidak membuat folder sertifikat maupun kunci API. Di Windows folder ini dibatasi untuk
+Administrators dan SYSTEM.
 
-Opsi: `--listen` (bawaan `0.0.0.0:8443`), `--dir`, `--state-dir`, `--log-dir`,
-`--platform-url` (mode B), `--force` (tulis ulang konfigurasi; kunci penyimpanan tetap).
+Opsi: `--mode a|b`, `--listen` (bawaan `0.0.0.0:8443`), `--dir`, `--state-dir`,
+`--log-dir`, `--public-url` (mode A), `--platform-url` (mode B), `--force` (tulis ulang
+konfigurasi; kunci penyimpanan tetap).
 
 Komentar di `bridge.yaml` mengikuti bahasa perintah (`--lang id` menghasilkan komentar
 berbahasa Indonesia).
@@ -244,6 +275,15 @@ sudo privasimu-bridge --lang id check          # Windows: privasimu-bridge --lan
 Setiap baris berupa `[OK]`, `[WARN]` atau `[FAIL]`. Pada tahap ini Anda seharusnya melihat
 konfigurasi, penyimpanan rahasia, dan sertifikat. Perbaiki setiap `[FAIL]` sebelum lanjut.
 
+Pada mode B tidak ada sertifikat yang diperiksa; `check` memanggil API agen Privasimu
+seperti yang dilakukan agen (dengan `agent.ca_file` dan proxy) dan menyebutkan apa yang
+menghalangi: sertifikat yang tidak dipercaya server ini (isi `agent.ca_file`), sertifikat
+untuk nama host lain, HTTP Basic Auth atau penolakan lain di depan Privasimu, pengalihan,
+atau alamat tanpa API agen (bagian 12). Bila semuanya beres:
+```text
+[OK]   mode B: API agen bridge menjawab di https://privasimu.contoh.co.id/api/bridge-agent/v1/poll (TLS terverifikasi)
+```
+
 ## 6. Akun basis data hanya-baca
 
 Pakai akun khusus per basis data yang dapat membaca katalog dan, bila sampling diaktifkan,
@@ -272,6 +312,42 @@ dengan hak lebih pun tidak dapat menulis lewat bridge, dan server sendiri menghe
 pernyataan setelah `timeout` sumber (`max_execution_time` di MySQL 5.7.8+,
 `max_statement_time` di MariaDB 10.1+); kueri menunggu paling lama 5 detik di belakang kunci
 metadata (`lock_wait_timeout`).
+
+**Bridge di Docker.** Basis data memeriksa alamat asal koneksi, dan dengan Docker alamat itu
+tidak selalu alamat server sendiri:
+
+| Di mana basis data berjalan | Alamat yang dilihatnya | Berikan akun ke |
+|---|---|---|
+| server lain | alamat host Docker (Docker menerjemahkan koneksi keluar) | alamat host Docker |
+| host Docker itu sendiri, atau container di jaringan Docker yang sama | alamat container bridge di jaringan Docker, misalnya `172.18.0.5`, yang dapat berubah bila container dibuat ulang | alamat container yang tetap (`ipv4_address` di `deploy/docker/docker-compose.yml`), atau subnet jaringan itu |
+
+Untuk melihat alamatnya, jalankan `privasimu-bridge check`: MySQL menyebutkannya dalam
+penolakannya, misalnya `Access denied for user 'privasimu_ro'@'172.30.10.10'`. Akun MySQL
+adalah pengguna **dan** host: izin untuk `'privasimu_ro'@'10.10.5.21'` tidak berlaku bagi
+`'privasimu_ro'@'172.30.10.10'`. Contoh persisnya:
+
+```sql
+-- Alamat tetap bridge di jaringan Docker-nya (docker-compose.yml: ipv4_address):
+CREATE USER 'privasimu_ro'@'172.30.10.10' IDENTIFIED BY '<kata sandi kuat>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'172.30.10.10';
+
+-- Atau seluruh subnet Docker. Bentuk netmask berlaku di MySQL 5.7, 8.x, dan MariaDB:
+CREATE USER 'privasimu_ro'@'172.30.10.0/255.255.255.0' IDENTIFIED BY '<kata sandi kuat>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'172.30.10.0/255.255.255.0';
+-- MySQL 8.0.23 ke atas juga menerima 'privasimu_ro'@'172.30.10.0/24'.
+
+-- Basis data di server lain melihat host Docker (di sini 10.10.5.21):
+CREATE USER 'privasimu_ro'@'10.10.5.21' IDENTIFIED BY '<kata sandi kuat>';
+GRANT SELECT, SHOW VIEW ON crm.* TO 'privasimu_ro'@'10.10.5.21';
+```
+
+Hindari `'%'`; bila perlu pola, batasi pada subnet (`'privasimu_ro'@'172.30.10.%'`). Izin
+membaca tabel grant di bagian 7.2 diberikan ke akun yang sama (pengguna dan host).
+PostgreSQL menerima alamat yang sama di `pg_hba.conf`:
+```text
+hostssl corebank privasimu_ro 172.30.10.10/32 scram-sha-256
+hostssl corebank privasimu_ro 172.30.10.0/24  scram-sha-256
+```
 
 **Microsoft SQL Server**
 ```sql
@@ -673,9 +749,13 @@ langkah-langkah ini sama untuk keduanya.
    atau pengguna yang akses Data Discovery-nya diatur tegas ke `ubah` di Menu Preferences
    (untuk divisinya atau untuk dirinya sendiri). Pengguna lain yang punya akses Data
    Discovery dapat melihat agen dan menautkan sistem ke sumber-sumbernya.
-2. Di server bridge isi `agent.platform_url` di `bridge.yaml` (dan `agent.proxy_url` /
-   `agent.proxy_auth: "secret:proxy_auth"` bila server keluar ke internet lewat proxy;
-   `agent.ca_file` untuk Privasimu on-premise dengan sertifikat internal).
+2. Di server bridge buat konfigurasi dengan `init --mode b --platform-url https://…`
+   (bagian 2), atau isi `agent.platform_url` di `bridge.yaml` yang sudah ada: alamat backend
+   Privasimu tanpa `/api`, seperti yang ditampilkan panduan pemasangan di Privasimu. Tambahkan
+   `agent.proxy_url` / `agent.proxy_auth: "secret:proxy_auth"` bila server keluar ke internet
+   lewat proxy, dan `agent.ca_file` bila sertifikat Privasimu berasal dari CA internal atau
+   privat. Bila web server di depan Privasimu meminta password (HTTP Basic Auth, biasa di
+   server staging), kecualikan `/api/bridge-agent/` darinya (bagian 12).
 3. Daftarkan dan pasang:
    ```sh
    sudo privasimu-bridge --lang id agent enroll --token pvbe_…
@@ -811,6 +891,46 @@ Yang ditampilkan Privasimu (`error_kind`) dan yang perlu dilakukan:
 | `bridge_contract` | "Respons layanan jembatan tidak sesuai kontrak." | Alamat itu bukan bridge ini (halaman galat proxy, layanan lain). |
 | `bridge_incomplete` | (sebuah tabel ditandai tidak lengkap) | Satu tabel gagal atau daftar tabel tidak lengkap; tabel lain tetap tersimpan. Periksa log audit untuk tabel itu. |
 | `limit` | (sebuah tabel atau daftar ditandai) | Lebih dari 500 tabel atau 1000 kolom: pindai per skema. |
+
+**Mode B.** `privasimu-bridge check` menyebutkan apa yang menghalangi agen menuju Privasimu:
+
+| `check` menyebutkan | Penyebab dan perbaikan |
+|---|---|
+| "ditandatangani otoritas yang tidak dipercaya server ini" | Sertifikat Privasimu berasal dari CA internal atau privat: simpan CA itu (PEM, beserta CA perantaranya) dalam satu berkas dan isi `agent.ca_file`. Sertifikat publik tidak memerlukan apa pun. |
+| "tidak berlaku untuk nama itu (berlaku untuk: …)" | `agent.platform_url` memakai nama yang tidak ada di sertifikat (sering alamat IP atau alias internal): pakai salah satu nama yang disebutkan, atau terbitkan sertifikat untuk nama ini. |
+| "tidak berlaku sekarang (berlaku dari … sampai …)" | Sertifikat kedaluwarsa, atau jam server ini salah. |
+| "meminta HTTP Basic Auth" | Web server di depan Privasimu meminta password. Agen mengirim tokennya sendiri di header `Authorization`, sehingga tidak dapat sekaligus mengirim password Basic Auth: kecualikan `/api/bridge-agent/` di sana (di bawah). Setiap permintaan agen tetap diautentikasi dengan tokennya. `agent enroll` dan log agen menyebutkan hal yang sama. |
+| "pengalihan ke …" | Alamat itu mengalihkan (http ke https, halaman login, host lain): isi `agent.platform_url` dengan alamat https tujuan akhirnya; agen tidak pernah mengikuti pengalihan. |
+| "tidak ada API agen bridge di …" | `agent.platform_url` bukan alamat backend (diisi tanpa `/api`), atau versi Privasimu itu belum punya agen bridge. |
+| "menolak … (bukan API agen)" | Firewall, WAF, atau aturan akses di depan Privasimu: loloskan `/api/bridge-agent/`. |
+| "tidak dapat ditulis" (saat `init`) | Docker: folder konfigurasi atau volume state milik root (bagian 1, Docker). |
+
+Mengecualikan jalur agen dari Basic Auth, sementara bagian lain situs tetap terlindungi
+(pakai upstream yang sama dengan rute `/api/` Anda):
+
+```nginx
+location /api/bridge-agent/ {
+    auth_basic off;
+    proxy_pass http://privasimu_api;    # upstream dari location /api/
+}
+```
+```apache
+<Location "/api/bridge-agent/">
+    Require all granted
+</Location>
+```
+```caddy
+@agent path /api/bridge-agent/*
+handle @agent {
+    reverse_proxy privasimu-api:8080
+}
+handle {
+    basic_auth {
+        staff <hash bcrypt>
+    }
+    reverse_proxy privasimu-api:8080
+}
+```
 
 Uji bridge secara manual dari mesin yang diizinkan terhubung (jangan pernah menaruh kunci
 asli di skrip atau tiket):
