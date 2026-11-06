@@ -36,6 +36,9 @@ type DB struct {
 	Access map[string]dbsource.Access
 	// Fail makes the given operation ("list", "find", "columns", "sample", "access") fail.
 	Fail map[string]error
+	// Stuck makes the given operation ("open", "list", "columns", "sample") block until its
+	// channel is closed, ignoring the context: a driver call that never returns.
+	Stuck map[string]chan struct{}
 
 	mu      sync.Mutex
 	Opened  []dbsource.Target // every target Open was called with
@@ -48,10 +51,18 @@ func (d *DB) Opener() func(ctx context.Context, t dbsource.Target) (dbsource.Con
 		d.mu.Lock()
 		d.Opened = append(d.Opened, t)
 		d.mu.Unlock()
+		d.stuck("open")
 		if err := d.Fail["open"]; err != nil {
 			return nil, err
 		}
 		return &conn{db: d, target: t}, nil
+	}
+}
+
+// stuck blocks while the operation is stuck (DB.Stuck), whatever the context says.
+func (d *DB) stuck(op string) {
+	if ch := d.Stuck[op]; ch != nil {
+		<-ch
 	}
 }
 
@@ -111,6 +122,7 @@ func (c *conn) allowed(schema string) bool {
 }
 
 func (c *conn) ListTables(ctx context.Context, schema string) ([]dbsource.Table, error) {
+	c.db.stuck("list")
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
@@ -179,6 +191,7 @@ func (c *conn) FindTable(ctx context.Context, ref, schema string) (dbsource.Tabl
 }
 
 func (c *conn) Columns(ctx context.Context, t dbsource.Table) ([]dbsource.Column, error) {
+	c.db.stuck("columns")
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
@@ -196,6 +209,7 @@ func (c *conn) Sample(ctx context.Context, t dbsource.Table, cols []dbsource.Col
 	c.db.mu.Lock()
 	c.db.Sampled++
 	c.db.mu.Unlock()
+	c.db.stuck("sample")
 	if err := c.wait(ctx); err != nil {
 		return err
 	}
