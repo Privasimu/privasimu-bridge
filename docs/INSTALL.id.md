@@ -373,7 +373,11 @@ BEGIN
 END;
 /
 ```
-Isi `schemas: [FIN]` pada sumbernya (skema Oracle adalah pemilik/owner).
+Isi `schemas: [FIN]` pada sumbernya (skema Oracle adalah pemilik/owner). Tanpa itu
+pemindaian hanya mencakup skema milik akun itu sendiri, yang kosong untuk akun seperti ini.
+Pada mode B, Privasimu menawarkan per sumber para pemilik yang tabelnya dapat dibaca akun
+itu, dan Anda memilih di sana mana yang dipindai; `schemas:` lalu membatasi apa yang dapat
+dipilih (bagian 11).
 
 **MongoDB**
 ```js
@@ -796,6 +800,13 @@ Agen tidak membuka port; cukup izinkan HTTPS keluar ke Privasimu.
   sewanya setiap 40 detik dengan nilai yang sama; nilai yang tetap selama bermenit-menit
   berarti satu langkah yang lambat, dan versi Privasimu yang mendeteksi macet akan
   menggagalkan tugas seperti itu.
+- **Skema per sumber**: untuk sumber PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, dan
+  Redshift, agen memberi tahu Privasimu skema mana yang dapat dibaca akunnya (Oracle: para
+  pemilik tabel yang dapat dibacanya; hanya nama). Agen membacanya saat mulai dan setelah
+  setiap uji koneksi atau pemindaian sumber itu, sehingga **Uji Koneksi** di Privasimu juga
+  memperbarui daftarnya. Di Privasimu Anda memilih per sistem skema mana yang dipindai;
+  tanpa pilihan, semua skema yang diizinkan konfigurasi dipindai. `schemas:` pada sumber
+  membatasi daftar dan pilihan itu.
 - **Rotasi token**: setelah admin merotasi token di Privasimu, agen mengambil token baru
   pada poll berikutnya dan menyimpannya di penyimpanan terenkripsi. Bila jawabannya hilang
   di jalan, Privasimu meminta lagi pada poll berikutnya dan agen merotasi lagi; token
