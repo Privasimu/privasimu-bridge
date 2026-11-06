@@ -93,6 +93,13 @@ type Agent struct {
 	// roleNames is what the access inventory reports for a group role
 	// (access_inventory.role_names).
 	roleNames dbsource.RoleNaming
+	// schemas are the schema lists read from the database sources (contract P-4), by source
+	// id; guarded by mu, stored in the state directory under schemaSave.
+	schemas    map[string]schemaList
+	schemaSave sync.Mutex
+	// discover reads the schema lists when the agent starts (discoverSchemas); tests may
+	// switch it off.
+	discover func(ctx context.Context)
 }
 
 // State is what enrollment leaves in the state directory.
@@ -153,6 +160,8 @@ func New(d Deps) (*Agent, error) {
 		open: d.Open, stateDir: d.Config.Resolve(d.Config.StateDir), running: map[string]*runningJob{}, releases: map[string]Job{},
 		withheld: map[string]bool{}, sleep: sleepCtx, minRenew: 5 * time.Second, grace: watchdogGrace}
 	a.saveToken = func(token string) error { return StoreToken(a.cfg, a.resolver, token) }
+	a.schemas = loadSchemaLists(a.stateDir)
+	a.discover = a.discoverSchemas
 	if a.log == nil {
 		a.log = slog.New(slog.DiscardHandler)
 	}
@@ -226,8 +235,16 @@ func wireVersion(v string) string {
 // "source_engine:<engine>"), usable file roots and, when the platform lists
 // source_kind:packages, packages targets. The list is never null: both platform lines
 // refuse "sources": null. The digest is computed over exactly what is sent, so it changes
-// when the platform starts (or stops) accepting a kind or an engine.
+// when the platform starts (or stops) accepting a kind or an engine. A database source
+// with a schemas allow-list offers that list (no database read yet; see inventory).
 func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, features []string) ([]Source, string) {
+	return inventory(cfg, fs, pk, features, nil)
+}
+
+// inventory is Inventory with the schema lists read from the databases: each database entry
+// carries the schemas its account can see (contract P-4), so the digest also changes when a
+// list changes.
+func inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, features []string, lists map[string]schemaList) ([]Source, string) {
 	out := []Source{}
 	for i := range cfg.Sources {
 		src := &cfg.Sources[i]
@@ -261,6 +278,7 @@ func Inventory(cfg *config.Config, fs *files.Service, pk *packages.Service, feat
 		out = append(out, packageSources(cfg, pk)...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	addSchemas(cfg, out, lists)
 	raw, _ := json.Marshal(out)
 	sum := sha256.Sum256(raw)
 	return out, "sha256:" + hex.EncodeToString(sum[:])
@@ -342,6 +360,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.packages.RunSchedule(ctx)
 		}()
 	}
+	// The schema lists of the database sources (contract P-4), read once in the background:
+	// polling does not wait for them, a changed list reaches the platform with the next
+	// inventory, and stopping does not wait for them either (a database call that ignores
+	// its context must not hold the service, as for jobs).
+	if a.discover != nil {
+		go a.discover(ctx)
+	}
 	minPoll, maxPoll := a.cfg.Agent.PollMin.D(), a.cfg.Agent.PollMax.D()
 	backoff := minPoll
 	inventorySent := false
@@ -374,7 +399,8 @@ func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duratio
 	a.mu.Lock()
 	features := a.features
 	a.mu.Unlock()
-	sources, digest := Inventory(a.cfg, a.files, a.packages, features)
+	lists := a.schemaLists()
+	sources, digest := inventory(a.cfg, a.files, a.packages, features, lists)
 	a.mu.Lock()
 	running := make([]string, 0, len(a.running))
 	for id := range a.running {
@@ -408,7 +434,7 @@ func (a *Agent) pollOnce(ctx context.Context, inventorySent *bool) (time.Duratio
 		a.features = now
 		a.mu.Unlock()
 		featureChanged = true
-		sources, digest = Inventory(a.cfg, a.files, a.packages, now)
+		sources, digest = inventory(a.cfg, a.files, a.packages, now, lists)
 		features = now
 	}
 	a.logWithheld(features)

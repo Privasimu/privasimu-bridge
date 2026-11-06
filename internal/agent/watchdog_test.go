@@ -113,6 +113,7 @@ func TestWatchdogFreesTheSlotOfWorkThatNeverReturns(t *testing.T) {
 	e.fp.enqueue(Job{JobID: "j2", Type: JobTestSource, SourceID: "hr-share"})
 	a := e.agent()
 	a.grace = 200 * time.Millisecond
+	a.discover = nil // the stuck connection is the job's alone
 	if e.cfg.Agent.MaxParallelJobs != 1 {
 		t.Fatalf("max_parallel_jobs = %d, want the default 1", e.cfg.Agent.MaxParallelJobs)
 	}

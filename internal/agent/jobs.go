@@ -667,6 +667,8 @@ func (a *Agent) testDatabase(ctx context.Context, src *config.SourceConfig, prog
 		r.ServerVersion = &version
 	}
 	ev.Tables = n
+	// A connection test also refreshes the schemas the platform offers for this source.
+	a.refreshSchemas(ctx, src, conn)
 	return r, nil
 }
 
@@ -694,6 +696,16 @@ func (a *Agent) testRoot(id string) (TestResult, error) {
 func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceConfig, prog *progressState, ev *audit.Event) (any, []any, string, error) {
 	ev.Engine = src.Engine
 	o := job.Options
+	// The schemas chosen on the platform (option schemas) replace a single schema; table
+	// names then stay as without options: bare in the default schema, schema.table otherwise.
+	var chosen []string
+	if len(o.Schemas) > 0 {
+		var err error
+		if chosen, err = chosenSchemas(src, o.Schemas); err != nil {
+			return nil, nil, "", err
+		}
+		o.Schema = ""
+	}
 	if o.Schema != "" && len(src.Schemas) > 0 {
 		allowed := false
 		for _, s := range src.Schemas {
@@ -724,6 +736,10 @@ func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceCon
 	if err != nil {
 		return nil, nil, "", err
 	}
+	if chosen != nil {
+		// The listing covers exactly the chosen schemas, as an allow-list of this job.
+		t.Schemas = chosen
+	}
 	prog.set(stageConnect, 0, 0)
 	conn, err := a.open(ctx, t)
 	if err != nil {
@@ -743,6 +759,7 @@ func (a *Agent) scanDatabase(ctx context.Context, job Job, src *config.SourceCon
 		}
 		return nil, nil, "", dbFailure("list_tables", err)
 	}
+	a.refreshSchemas(ctx, src, conn)
 	items := make([]any, 0, len(res.Tables))
 	for _, tbl := range res.Tables {
 		items = append(items, tableItem(tbl))

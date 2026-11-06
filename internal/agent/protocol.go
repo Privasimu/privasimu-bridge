@@ -194,6 +194,9 @@ type Job struct {
 type JobOptions struct {
 	// Schema narrows a database scan to one schema (must be allowed locally).
 	Schema string `json:"schema,omitempty"`
+	// Schemas (revision 5, proposal) narrows a database scan to these schemas, chosen from
+	// the source's reported schemas; it replaces Schema. Each must be allowed locally.
+	Schemas []string `json:"schemas,omitempty"`
 	// MaxTables and MaxColumns lower the local limits (500 and 1000 by default).
 	MaxTables  int `json:"max_tables,omitempty"`
 	MaxColumns int `json:"max_columns,omitempty"`
@@ -220,6 +223,10 @@ type Source struct {
 	Label        string   `json:"label"`
 	Description  string   `json:"description,omitempty"`
 	Capabilities []string `json:"capabilities"`
+	// Schemas (revision 5, proposal; contract P-4) are the schema names a database source's
+	// account can see, narrowed by the local allow-list: the choice the platform offers.
+	// Absent (nil) when not known; [] when read but empty.
+	Schemas []string `json:"schemas,omitzero"`
 }
 
 // SourcesRequest replaces the agent's inventory on the platform.
