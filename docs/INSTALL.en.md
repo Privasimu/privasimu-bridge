@@ -677,6 +677,29 @@ The agent opens no port; allow outbound HTTPS to Privasimu only.
 
 - **Limits**: at most 200 sources and file roots together, `agent.max_parallel_jobs` 1 to
   10 and `agent.poll_max` at most 5 minutes; `check` refuses other values.
+- **Jobs at once** (`agent.max_parallel_jobs`, default 1): how many jobs the agent runs at
+  the same time; it never asks Privasimu for more. With 1, jobs wait in Privasimu's queue
+  and run one after another, which keeps the load on your databases and on this server
+  lowest. Raise it when several systems must be scanned in the same window: each extra job
+  needs about one free CPU core on this server, and each database scan opens at most 4
+  connections to its own source. Change the value and restart the service:
+  ```yaml
+  agent:
+    max_parallel_jobs: 3     # 1 to 10
+  ```
+- **Deadlines and the watchdog**: each job has a deadline: 10 minutes for a connection
+  test, 30 minutes for a database scan, 6 hours for a file scan (Privasimu can only lower
+  them), and twice `packages.timeout` for a package scan. At the deadline the scan stops and
+  Privasimu shows that it took too long, with the stage and the table where it stopped
+  (`schema.table`, never a value); the bridge log names the column too. Work that still
+  has not stopped 60 seconds later is abandoned: Privasimu gets the failure anyway, the slot
+  runs the next job, and `privasimu-bridge healthcheck --mode agent` reports the agent as
+  unhealthy until you restart the service. Send the `job abandoned` log line (with `stage`,
+  `table` and `column`) to Privasimu support.
+- **Progress**: the percentage in Privasimu moves only when the job advances (a stage, a
+  table, a file, a part of the result). While one step takes time, the agent renews its
+  lease every 40 seconds with the same values; a value that stays the same for many minutes
+  means one slow step, and a Privasimu version that detects stalls fails such a job.
 - **Token rotation**: after an admin rotates the token in Privasimu, the agent takes a new
   token on its next poll and keeps it in the encrypted store. If the answer is lost on the
   way, Privasimu asks again on the next poll and the agent rotates again; its old token

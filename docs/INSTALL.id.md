@@ -690,6 +690,32 @@ Agen tidak membuka port; cukup izinkan HTTPS keluar ke Privasimu.
 - **Batas**: paling banyak 200 sumber dan root berkas seluruhnya,
   `agent.max_parallel_jobs` 1 sampai 10, dan `agent.poll_max` paling lama 5 menit;
   `check` menolak nilai lain.
+- **Tugas sekaligus** (`agent.max_parallel_jobs`, bawaan 1): berapa tugas yang dijalankan
+  agen pada saat yang sama; agen tidak pernah meminta lebih dari itu ke Privasimu. Dengan 1,
+  tugas menunggu di antrean Privasimu dan berjalan satu per satu, sehingga beban pada basis
+  data Anda dan pada server ini paling rendah. Naikkan bila beberapa sistem harus dipindai
+  dalam jendela waktu yang sama: setiap tugas tambahan perlu kira-kira satu inti CPU bebas di
+  server ini, dan setiap pindai basis data membuka paling banyak 4 koneksi ke sumbernya
+  sendiri. Ubah nilainya lalu jalankan ulang layanan:
+  ```yaml
+  agent:
+    max_parallel_jobs: 3     # 1 sampai 10
+  ```
+- **Batas waktu dan watchdog**: setiap tugas punya batas waktu: 10 menit untuk uji koneksi,
+  30 menit untuk pindai basis data, 6 jam untuk pindai berkas (Privasimu hanya dapat
+  menurunkannya), dan dua kali `packages.timeout` untuk pindai paket. Saat batas waktu
+  tercapai pemindaian berhenti dan Privasimu menampilkan bahwa pemindaian terlalu lama,
+  beserta tahap dan tabel tempat ia berhenti (`skema.tabel`, tidak pernah nilai); log bridge
+  juga menyebut kolomnya. Pekerjaan yang 60 detik kemudian masih belum berhenti
+  ditinggalkan: Privasimu tetap menerima kegagalannya, slotnya menjalankan tugas berikutnya,
+  dan `privasimu-bridge healthcheck --mode agent` melaporkan agen tidak sehat sampai layanan
+  dijalankan ulang. Kirim baris log `job abandoned` (dengan `stage`, `table`, dan `column`)
+  ke dukungan Privasimu.
+- **Kemajuan**: persentase di Privasimu hanya bergerak bila tugas benar-benar maju (tahap,
+  tabel, berkas, atau bagian hasil). Selama satu langkah memakan waktu, agen memperbarui
+  sewanya setiap 40 detik dengan nilai yang sama; nilai yang tetap selama bermenit-menit
+  berarti satu langkah yang lambat, dan versi Privasimu yang mendeteksi macet akan
+  menggagalkan tugas seperti itu.
 - **Rotasi token**: setelah admin merotasi token di Privasimu, agen mengambil token baru
   pada poll berikutnya dan menyimpannya di penyimpanan terenkripsi. Bila jawabannya hilang
   di jalan, Privasimu meminta lagi pada poll berikutnya dan agen merotasi lagi; token

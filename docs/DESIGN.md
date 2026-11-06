@@ -298,6 +298,20 @@ and 512 KiB; supports an HTTP(S) proxy with credentials from a secret and an ext
 for an on-premise platform. Its inventory always carries a label (the id
 when none is configured) and never more than the platforms accept.
 
+**Deadlines, the watchdog and progress (revision 5, proposal; 6 November 2026).** Every job
+has a deadline (connection test 10 minutes, database scan 30 minutes, file scan 6 hours,
+package scan twice its tool timeout plus a minute; `deadline_seconds` lowers them) that
+every stage honours: catalog and sampling queries carry the job's context, sampled values
+are no longer classified once it ends, and a database scan returns at the deadline even when
+a database call does not. The failure names the stage and, for a database scan, the table
+(`schema.table`, never a value); the local log adds the column. Work that has not returned
+60 seconds after its deadline or a cancellation is abandoned by a watchdog: the job is
+reported failed (not retryable), its slot of `max_parallel_jobs` is freed, and the local
+status counts the work (`healthcheck --mode agent` is unhealthy) until it ends. Lease
+renewals carry the progress as it is: the values change only when a stage, a table, a file
+or a result part advances, so a renewal without advancement is a heartbeat, and the
+percentage never goes back (AGENT-PROTOCOL.md sections 5.4 and 6.8).
+
 **Package scans (revision 3, security posture per RoPA).** The opt-in job `scan_packages`
 (`internal/packages`) lists the software of an allow-listed target (an installed host, a
 directory, or a local OCI or docker image archive) with Syft and matches it with Grype or
@@ -406,6 +420,12 @@ A literal password in the file is a validation error that never echoes the value
   are personal data but whose name is not is marked `shadow`.
 - **Protection state** from samples: plaintext, masked, encrypted (Laravel Crypt
   payloads, long hex, high-entropy base64), mixed.
+- **Termination**: the text scanner moves forward on every byte it examines. Until 6
+  November 2026 it stayed for ever on a `+` or `(` glued to a word and followed by a digit
+  (`2+2`, `Lantai(2)`, `budi+0812…@…`), which hung a staging scan at full CPU; an exhaustive
+  test over short strings, chunked writes and a fuzz target now cover it. Values are
+  classified inside the sampling query's row loop, which stops classifying once the job's
+  context ends.
 - **Language model for long text (optional, `detection.nlp`, off by default).** Patterns
   cannot recognise a name, an address or a diagnosis in free text. The bridge can send long
   text to a model service the client runs on the bridge server or its internal network
@@ -435,6 +455,10 @@ A literal password in the file is a validation error that never echoes the value
 - **Logs**: JSON lines to standard error, or `logs/bridge.log` when running as a
   service. **Audit**: `logs/audit.jsonl` (rotated by size), one event per request, job or
   file scan, never a value.
+- **Health**: `healthcheck` asks the mode A listener for `/healthz`; with `--mode agent` it
+  reads the agent's status file and is unhealthy when the last successful poll is too old
+  or when work the watchdog abandoned is still running (`abandoned_jobs`; restart the
+  service).
 - **Keys**: `key create`, `key list`, `key revoke`; certificates are reloaded when the
   files change (no restart after renewal).
 - **Upgrades**: replace the binary and restart the service; the configuration is checked
@@ -615,6 +639,10 @@ caller names, credentials in every request) is what the bridge leaves out by des
   `mandatory_roles` and partial revokes are not read. SQL Server, Oracle and the other
   engines have none yet. With `role_names: plain`, a group role named after a person
   shows that name.
+- Work the job watchdog abandons (a database call or a detector that ignores the job's
+  context) keeps running until it returns or the service restarts: Go cannot stop a
+  goroutine from outside. Its job is reported and its slot freed at once, and the
+  healthcheck reports it; no such work is known after the detector fix of 6 November 2026.
 - Scanned PDFs and images (OCR), legacy Office formats, encrypted documents and archives
   inside shares are counted, not read.
 - Name heuristics and the NPWP check digit (DJP does not publish the algorithm; Luhn is
