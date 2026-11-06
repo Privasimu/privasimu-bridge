@@ -1,14 +1,36 @@
-# Example: Privasimu Bridge with Docker Compose. Use one of the two services.
+# Example: Privasimu Bridge with Docker Compose. Use one of the services.
 #
-# First run (creates config/bridge.yaml, the store key and the first API key):
+# The bridge runs as the user 65532. The configuration folder must belong to it:
 #   mkdir -p config && sudo chown 65532:65532 config
-#   docker compose run --rm bridge init --dir /etc/privasimu-bridge \
+# The state volume (bridge-state) does on its own when it is created by this image. A volume
+# made by an older image, or a bind mount, is owned by root: give it to 65532 once (the
+# image has no shell, so another one does it; "docker volume ls" shows the volume's name,
+# <folder>_bridge-state by default):
+#   docker run --rm -v <folder>_bridge-state:/state busybox:1.37 chown -R 65532:65532 /state
+#   sudo chown -R 65532:65532 ./state                          (a bind mount instead)
+#
+# First run, mode B (outbound only, no certificate, no API key):
+#   docker compose run --rm agent init --mode b --dir /etc/privasimu-bridge \
+#     --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs \
+#     --platform-url https://privasimu.example.co.id
+#   docker compose run --rm agent secret set corebank_pg      (reads the value from stdin)
+#   docker compose run --rm agent agent enroll --token pvbe_...
+#   docker compose run --rm agent check
+#   docker compose up -d agent          (or agent-scan: with package scans; make image-scan)
+#
+# First run, mode A (Privasimu calls the bridge; creates the first API key):
+#   docker compose run --rm bridge init --mode a --dir /etc/privasimu-bridge \
 #     --state-dir /var/lib/privasimu-bridge --log-dir /var/lib/privasimu-bridge/logs \
 #     --public-url https://bridge.example.co.id:8443
-#   docker compose run --rm bridge secret set corebank_pg     (reads the value from stdin)
+#   docker compose run --rm bridge secret set corebank_pg
 # Then put the certificate in config/tls/, edit config/bridge.yaml and start:
-#   docker compose up -d bridge          (mode A)    or    docker compose up -d agent (mode B)
-#   (or agent-scan: mode B with package scans; build it with: make image-scan)
+#   docker compose up -d bridge
+#
+# Database accounts: a database sees the bridge's connections from the container's address
+# on the Docker network (a database on this host or in another container) or from this
+# host's address (a database on another server, through Docker's NAT). Grant the account to
+# that address or subnet; the fixed network at the end of this file keeps it stable (install
+# guide, section 6, "The bridge in Docker").
 
 x-hardening: &hardening
   image: privasimu-bridge:0.1.0
@@ -62,3 +84,16 @@ services:
 
 volumes:
   bridge-state:
+
+# Optional: a fixed subnet and address for the bridge, so that a database grants its account
+# to one address (MySQL 'privasimu_ro'@'172.30.10.10', pg_hba.conf 172.30.10.10/32) instead of
+# a whole Docker subnet. Choose a subnet no other network on this host uses, uncomment the
+# block below, and add to the service you run:
+#     networks:
+#       bridge-net:
+#         ipv4_address: 172.30.10.10
+# networks:
+#   bridge-net:
+#     ipam:
+#       config:
+#         - subnet: 172.30.10.0/24

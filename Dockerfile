@@ -17,9 +17,16 @@ ARG COMMIT=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
       -ldflags "-s -w -X github.com/privasimu/bridge/internal/buildinfo.Version=${VERSION} -X github.com/privasimu/bridge/internal/buildinfo.Commit=${COMMIT}" \
       -o /out/privasimu-bridge ./cmd/privasimu-bridge
+# An empty directory, copied below as the state directory owned by the runtime user.
+RUN mkdir -p /out/state
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/privasimu-bridge /usr/local/bin/privasimu-bridge
+# The state directory exists in the image and belongs to the user the bridge runs as. Docker
+# creates a mount point that is missing from the image as root, which the bridge cannot
+# write; a new named volume copies this directory's owner instead. A volume or a bind mount
+# made before must be given to 65532 once (install guide, section 1, Docker).
+COPY --from=build --chown=65532:65532 /out/state /var/lib/privasimu-bridge
 # 65532 is the "nonroot" user of the distroless image.
 USER 65532:65532
 ENV PRIVASIMU_BRIDGE_CONFIG=/etc/privasimu-bridge/bridge.yaml
