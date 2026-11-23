@@ -77,8 +77,8 @@ var registry = map[Category]Info{
 	Health:              {PDPSpecific, "health"},
 	Biometric:           {PDPSpecific, "biometric"},
 	Genetic:             {PDPSpecific, "biometric"},
-	Religion:            {PDPSpecific, "belief"},
 	CriminalRecord:      {PDPSpecific, "legal"},
+	Religion:            {PDPGeneral, "belief"}, // UU PDP Pasal 4 ayat (3) huruf d (buglist T-2026W47-294)
 	PersonName:          {PDPGeneral, "identity"},
 	MotherMaidenName:    {PDPGeneral, "identity"},
 	BirthDate:           {PDPGeneral, "demographic"},
