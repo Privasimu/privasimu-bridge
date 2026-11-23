@@ -767,7 +767,7 @@ manual decisions, auto-assignment, counts and notifications behave as for every 
 | `type_length` | parsed from `data_type` (`ContentPiiScanner::parseTypeLength` / its Go port) |
 | `nullable` | `nullable` |
 | `pii_detected` | `pii` OR the platform's own name rule (`PiiDetector::analyze($name, '')`) |
-| `pdp_category` | `pdp_category`; when absent and the name rule matches, the rule's category |
+| `pdp_category` | the platform's category of `category` when the platform knows the code (the codes below); otherwise `pdp_category`; when absent and the name rule matches, the rule's category |
 | `classification` | `sensitive` for `spesifik`, `pii` for `umum`, else the name rule's classification |
 | `encryption_required` | `pdp_category == "spesifik"` |
 | `encrypted` | `protection_state == "encrypted"` |
@@ -801,10 +801,22 @@ Nationality or ethnicity · `email` Alamat email / E-mail address · `phone` Nom
 Foto / Photo · `employee_id` Nomor induk pegawai / Employee number · `student_id` Nomor
 induk siswa / Student number · `vehicle_plate` Nomor polisi kendaraan / Vehicle plate.
 
+The platform's category of these codes: `spesifik` for `nik`, `kk`, `npwp`, `passport`,
+`driving_license`, `bpjs_kesehatan`, `bpjs_ketenagakerjaan`, `card_number`, `bank_account`,
+`financial`, `health`, `biometric`, `genetic` and `criminal_record`; `umum` for every other
+code above. The platform decides it, not the agent, so an agent installed before a
+classification change is stored with the platform's category: religion is general personal
+data (UU PDP Pasal 4 ayat (3) huruf d), which bridge versions before buglist T-2026W47-294
+reported as `spesifik`. A code the platform does not know keeps the agent's `pdp_category`.
+
 **`scan_files`**: a file share is a new source type (section 8). Store
 `scan_results = {"engine":"bridge_files","summary":<result>,"files":<items, at most 5000,
 most findings first, ties by id>,"files_stored":<n>,"scanned_at":<now>}` (empty count
-maps stay `{}` when stored and when returned, section 2),
+maps stay `{}` when stored and when returned, section 2); a file's `pdp_category`, when
+sent, is replaced by the platform's: `spesifik` when one of its categories counted above
+zero is a specific code, else `umum`; without such a category, the category of its
+`name_hint`; the agent's value stays when one of those codes is unknown to the platform and
+none is specific,
 `pii_alert_count` = `files_with_pii`, `pdp_alert_count` = the number of files whose
 `pdp_category` is `spesifik`, `scanning_status = done`, `last_scanned_at = now`.
 
@@ -1202,6 +1214,12 @@ and followed by a digit, as in `2+2` or `Lantai(2)`), fixed in the agent. Additi
    system stores its choice in `connection_config.bridge_schemas`, and a `scan_database`
    job carries it as the option `schemas`. Reported case: an Oracle `FREEPDB1` source whose
    account owns no table, while the data lives in other schemas (owners).
+
+**Platform storage, 23 November 2026** (buglist T-2026W47-294; no wire change): the platform
+stores its own UU PDP category for a category code it knows, for a column and for a file
+(section 7), instead of the agent's `pdp_category`. The bridge now reports religion as
+general personal data, as both platforms classify it; results of an older bridge, which
+reported it as specific, are stored as general too.
 
 **Open items** (not normative yet):
 
